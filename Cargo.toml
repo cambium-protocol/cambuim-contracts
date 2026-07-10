@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "shared",
+    "registry",
+    "credit-token",
+    "zk-verifier",
+    "marketplace",
+    "retirement",
+]
+
+[workspace.dependencies]
+soroban-sdk = "21"
