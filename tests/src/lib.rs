@@ -197,3 +197,107 @@ fn marketplace_orderbook_deferred() {
         marketplace_client.try_place_limit_order(&cambium_shared::OrderSide::Buy, &100, &10);
     assert_eq!(result, Err(Ok(cambium_shared::Error::NotYetImplemented)));
 }
+
+/// Test duplicate project registration fails.
+#[test]
+fn duplicate_project_registration_fails() {
+    let (env, registry_id, _credit_token_id, _zk_verifier_id, _marketplace_id, _retirement_id) =
+        deploy_all();
+    let registry_client = cambium_registry::RegistryContractClient::new(&env, &registry_id);
+
+    let project_id = BytesN::from_array(&env, &[1u8; 32]);
+    let project = Project {
+        id: project_id.clone(),
+        methodology: Symbol::new(&env, "VM0007"),
+        geography: Symbol::new(&env, "BRA"),
+        external_registry_ref: None,
+        verifying_key_version: 1,
+    };
+    registry_client.register_project(&project);
+
+    let result = registry_client.try_register_project(&project);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::AlreadyRegistered)));
+}
+
+/// Test get_project on non-existent project returns DoesNotExist.
+#[test]
+fn get_nonexistent_project_fails() {
+    let (env, registry_id, _credit_token_id, _zk_verifier_id, _marketplace_id, _retirement_id) =
+        deploy_all();
+    let registry_client = cambium_registry::RegistryContractClient::new(&env, &registry_id);
+
+    let fake_id = BytesN::from_array(&env, &[99u8; 32]);
+    let result = registry_client.try_get_project(&fake_id);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::NotFound)));
+}
+
+/// Test duplicate pool creation fails.
+#[test]
+fn duplicate_pool_creation_fails() {
+    let (env, _registry_id, credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
+        deploy_all();
+    let marketplace_client =
+        cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
+
+    let pool_id = BytesN::from_array(&env, &[1u8; 32]);
+    let paired_asset = Symbol::new(&env, "XLM");
+    marketplace_client.create_pool(&pool_id, &credit_token_id, &paired_asset, &100, &500);
+
+    let result =
+        marketplace_client.try_create_pool(&pool_id, &credit_token_id, &paired_asset, &100, &500);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::AlreadyRegistered)));
+}
+
+/// Test create_pool with non-positive amounts fails.
+#[test]
+fn create_pool_nonpositive_fails() {
+    let (env, _registry_id, credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
+        deploy_all();
+    let marketplace_client =
+        cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
+
+    let pool_id = BytesN::from_array(&env, &[1u8; 32]);
+    let paired_asset = Symbol::new(&env, "XLM");
+
+    let result =
+        marketplace_client.try_create_pool(&pool_id, &credit_token_id, &paired_asset, &0, &500);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::NonPositiveAmount)));
+}
+
+/// Test get_pool on non-existent pool returns PoolNotFound.
+#[test]
+fn get_nonexistent_pool_fails() {
+    let (env, _registry_id, _credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
+        deploy_all();
+    let marketplace_client =
+        cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
+
+    let fake_pool = BytesN::from_array(&env, &[99u8; 32]);
+    let result = marketplace_client.try_get_pool(&fake_pool);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::PoolNotFound)));
+}
+
+/// Test swap on non-existent pool returns PoolNotFound.
+#[test]
+fn swap_nonexistent_pool_fails() {
+    let (env, _registry_id, _credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
+        deploy_all();
+    let marketplace_client =
+        cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
+
+    let fake_pool = BytesN::from_array(&env, &[99u8; 32]);
+    let result = marketplace_client.try_swap(&fake_pool, &100, &0);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::PoolNotFound)));
+}
+
+/// Test retirement of non-existent record returns RetirementNotFound.
+#[test]
+fn get_nonexistent_retirement_fails() {
+    let (env, _registry_id, _credit_token_id, _zk_verifier_id, _marketplace_id, retirement_id) =
+        deploy_all();
+    let retirement_client = cambium_retirement::RetirementContractClient::new(&env, &retirement_id);
+
+    let fake_id = BytesN::from_array(&env, &[99u8; 32]);
+    let result = retirement_client.try_get_retirement(&fake_id);
+    assert_eq!(result, Err(Ok(cambium_shared::Error::RetirementNotFound)));
+}

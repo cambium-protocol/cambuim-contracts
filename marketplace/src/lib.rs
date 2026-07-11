@@ -77,7 +77,12 @@ impl MarketplaceContract {
         // Emit pool creation event
         env.events().publish(
             (Symbol::new(&env, "pool_created"), pool_id),
-            (credit_token, pool.paired_asset.clone(), initial_credit, initial_paired),
+            (
+                credit_token,
+                pool.paired_asset.clone(),
+                initial_credit,
+                initial_paired,
+            ),
         );
 
         Ok(pool)
