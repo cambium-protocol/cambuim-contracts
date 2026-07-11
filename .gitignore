@@ -1,2 +1,9 @@
 target/
 test_snapshots/
+
+# Deployment artifacts (contain live contract addresses)
+deployed-addresses.*.json
+
+# Environment
+.env
+.env.local
