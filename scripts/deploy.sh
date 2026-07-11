@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — Deploy all Cambium contracts to a local Stellar sandbox.
+# deploy.sh — Deploy all Cambium contracts to a Stellar network.
 #
 # Usage:
 #   ./scripts/deploy.sh [network]
 #
-# If no network is specified, defaults to "local" (standalone sandbox).
+# Supported networks: local, testnet, futurenet, mainnet
+# Defaults to "local" (standalone sandbox).
+#
 # Writes deployed contract IDs to deployed-addresses.<network>.json.
+#
+# For testnet: automatically funds the deployer via Friendbot if needed.
 #
 # Dependency order:
 #   1. credit-token (no deps)
@@ -21,10 +25,70 @@ NETWORK="${1:-local}"
 OUTPUT_FILE="deployed-addresses.${NETWORK}.json"
 SOURCE="${STELLAR_SOURCE:-test}"
 
+# --- Network validation ---
+case "${NETWORK}" in
+    local)
+        RPC_URL="${STELLAR_RPC_URL:-http://localhost:8000}"
+        ;;
+    testnet)
+        RPC_URL="${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}"
+        PASSPHRASE="Test SDF Network ; September 2015"
+        ;;
+    futurenet)
+        RPC_URL="${STELLAR_RPC_URL:-https://soroban-futurenet.stellar.org}"
+        PASSPHRASE="Test SDF Future Network ; October 2022"
+        ;;
+    mainnet)
+        RPC_URL="${STELLAR_RPC_URL:-https://soroban-mainnet.stellar.org}"
+        PASSPHRASE="Public Global Stellar Network ; September 2015"
+        echo "WARNING: Mainnet deployment requires a completed security audit."
+        echo "See SECURITY.md before proceeding."
+        read -p "Type 'yes-audited' to confirm: " CONFIRM
+        if [ "${CONFIRM}" != "yes-audited" ]; then
+            echo "Aborted."
+            exit 1
+        fi
+        ;;
+    *)
+        echo "ERROR: Unknown network '${NETWORK}'. Supported: local, testnet, futurenet, mainnet"
+        exit 1
+        ;;
+esac
+
 echo "=== Cambium Protocol — Contract Deployment ==="
 echo "Network: ${NETWORK}"
+echo "RPC:     ${RPC_URL}"
 echo "Output:  ${OUTPUT_FILE}"
 echo ""
+
+# --- Fund deployer via Friendbot (testnet/futurenet only) ---
+fund_deployer() {
+    if [ "${NETWORK}" = "testnet" ] || [ "${NETWORK}" = "futurenet" ]; then
+        local source_addr
+        source_addr=$(stellar keys address "${SOURCE}" 2>/dev/null || echo "")
+        if [ -z "${source_addr}" ]; then
+            echo "ERROR: Source account '${SOURCE}' not found in stellar keys."
+            echo "Run: stellar keys add ${SOURCE}"
+            exit 1
+        fi
+
+        echo "Checking if deployer ${source_addr} needs funding..."
+        local balance
+        balance=$(stellar account balance "${source_addr}" --network "${NETWORK}" 2>/dev/null || echo "0")
+
+        if [ "${balance}" = "0" ] || [ -z "${balance}" ]; then
+            echo "Funding deployer via Friendbot..."
+            curl -s "https://friendbot.stellar.org/?addr=${source_addr}" > /dev/null
+            sleep 5  # Wait for Friendbot to complete
+            echo "Deployer funded."
+        else
+            echo "Deployer already funded (balance: ${balance})."
+        fi
+        echo ""
+    fi
+}
+
+fund_deployer
 
 # --- 1. Build all contracts to WASM ---
 echo "Building contracts..."
