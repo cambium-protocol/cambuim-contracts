@@ -1,0 +1,20 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+cambium-shared = { path = "../shared" }
+cambium-registry = { path = "../registry", features = ["testutils"] }
+cambium-credit-token = { path = "../credit-token", features = ["testutils"] }
+cambium-zk-verifier = { path = "../zk-verifier", features = ["testutils"] }
+cambium-marketplace = { path = "../marketplace", features = ["testutils"] }
+cambium-retirement = { path = "../retirement", features = ["testutils"] }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
