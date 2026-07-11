@@ -1,15 +1,25 @@
 #![no_std]
 
-use soroban_sdk::{contracterror, contracttype, Bytes, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN};
 
 /// Reference to who performed a retirement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
 pub enum RetireeRef {
     /// Public retirement — the retiring address is recorded on-chain.
-    Public(BytesN<32>),
+    Public(Address),
     /// Shielded retirement — only a nullifier hash is recorded.
     Shielded(BytesN<32>),
+}
+
+/// Side of a limit order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub enum OrderSide {
+    /// Buy credit tokens with paired asset.
+    Buy,
+    /// Sell credit tokens for paired asset.
+    Sell,
 }
 
 /// A zero-knowledge proof submitted with a mint request.
@@ -43,4 +53,12 @@ pub enum Error {
     AlreadyRegistered = 5,
     /// The amount specified is non-positive.
     NonPositiveAmount = 6,
+    /// This feature is not yet implemented.
+    NotYetImplemented = 7,
+    /// Insufficient token balance for the requested operation.
+    InsufficientBalance = 8,
+    /// The pool does not exist.
+    PoolNotFound = 9,
+    /// The retirement record was not found.
+    RetirementNotFound = 10,
 }
