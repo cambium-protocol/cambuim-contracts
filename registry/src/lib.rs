@@ -66,16 +66,14 @@ impl RegistryContract {
 
     /// Request a mint for a given project + vintage year.
     ///
-    /// # Proof placeholder (Day 1)
-    /// The `proof` parameter is validated for structural completeness (non-empty
-    /// `proof_data`, at least one public input) but is **not** cryptographically
-    /// verified yet. On Day 3, only the internals of this function change —
-    /// the call site and `Proof` type stay identical.
+    /// The proof is verified by the zk-verifier contract via a cross-contract
+    /// call. If the verifier returns false or errors, the mint is rejected.
     ///
     /// On success the function:
     /// 1. Validates inputs (project exists, amount > 0, proof non-empty).
-    /// 2. Creates or updates the `Vintage` record.
-    /// 3. Calls `credit-token::mint` to issue tokens to the requesting caller.
+    /// 2. Calls zk-verifier::verify to validate the proof.
+    /// 3. Creates or updates the `Vintage` record.
+    /// 4. Calls `credit-token::mint` to issue tokens to the requesting caller.
     pub fn request_mint(
         env: Env,
         project_id: BytesN<32>,
@@ -88,11 +86,6 @@ impl RegistryContract {
             return Err(Error::NonPositiveAmount);
         }
 
-        // Proof structural check (placeholder — real Groth16 verify wired in Day 3).
-        if proof.proof_data.is_empty() || proof.public_inputs.is_empty() {
-            return Err(Error::InvalidProof);
-        }
-
         // Project must be registered.
         let _project: Project = env
             .storage()
@@ -100,7 +93,29 @@ impl RegistryContract {
             .get(&DataKey::Project(project_id.clone()))
             .ok_or(Error::NotFound)?;
 
-        // --- 2. Update vintage ---
+        // --- 2. Cross-contract proof verification ---
+        // Call zk-verifier::verify(proof, public_inputs) -> Result<bool, Error>
+        let zk_verifier: Address = env
+            .storage()
+            .instance()
+            .get(&InstanceKey::ZkVerifier)
+            .expect("not initialized");
+
+        let proof_valid: bool = env.invoke_contract(
+            &zk_verifier,
+            &Symbol::new(&env, "verify"),
+            soroban_sdk::vec![
+                &env,
+                proof.into_val(&env),
+                proof.public_inputs.into_val(&env),
+            ],
+        );
+
+        if !proof_valid {
+            return Err(Error::InvalidProof);
+        }
+
+        // --- 3. Update vintage ---
         let vintage_key = DataKey::Vintage(project_id.clone(), vintage_year);
         let mut vintage: Vintage =
             env.storage()
@@ -120,7 +135,7 @@ impl RegistryContract {
 
         env.storage().persistent().set(&vintage_key, &vintage);
 
-        // --- 3. Cross-contract mint ---
+        // --- 4. Cross-contract mint ---
         // The registry is the only authorized caller of credit-token::mint.
         let credit_token: Address = env
             .storage()

@@ -15,6 +15,12 @@ fn setup() -> (Env, Address, RegistryContractClient<'static>, Address) {
     let credit_token_id = env.register_contract(None, CreditTokenContract);
     let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
 
+    // Deploy zk-verifier (mock implementation).
+    let zk_verifier_id = env.register_contract(None, cambium_zk_verifier::ZkVerifierContract);
+    let zk_verifier_client =
+        cambium_zk_verifier::ZkVerifierContractClient::new(&env, &zk_verifier_id);
+    zk_verifier_client.initialize();
+
     // Deploy registry.
     let registry_id = env.register_contract(None, RegistryContract);
     let registry_client = RegistryContractClient::new(&env, &registry_id);
@@ -22,9 +28,8 @@ fn setup() -> (Env, Address, RegistryContractClient<'static>, Address) {
     // Initialize credit-token with registry as admin (so registry can mint).
     token_client.initialize(&registry_id);
 
-    // Initialize registry with credit-token and a stub zk-verifier address.
-    let zk_verifier = Address::generate(&env);
-    registry_client.initialize(&credit_token_id, &zk_verifier);
+    // Initialize registry with credit-token and zk-verifier addresses.
+    registry_client.initialize(&credit_token_id, &zk_verifier_id);
 
     // SAFETY: env and clients share the same lifetime in tests; the 'static
     // transmute is safe because this test function owns env and it outlives
