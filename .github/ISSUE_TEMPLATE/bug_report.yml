@@ -1,0 +1,62 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check [open issues](https://github.com/cambium-protocol/cambuim-contracts/issues) to avoid duplicates. For security vulnerabilities, report privately per [SECURITY.md](../SECURITY.md) — do not use this form.
+
+  - type: dropdown
+    id: contract
+    attributes:
+      label: Affected contract
+      options:
+        - registry
+        - credit-token
+        - zk-verifier
+        - marketplace
+        - retirement
+        - shared
+        - scripts / deploy tooling
+        - CI / build system
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug. What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps or code snippet that triggers the bug.
+      placeholder: |
+        1. Call `registry::request_mint` with ...
+        2. Observe error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Rust version, stellar-cli version, network (local / testnet).
+      placeholder: |
+        rustc 1.79.0
+        stellar-cli 27.0.0
+        network: testnet
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Logs, transaction IDs, or anything else relevant.

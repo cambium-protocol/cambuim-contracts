@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a new feature or contract change
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [Roadmap](https://github.com/cambium-protocol/cambuim-contracts#roadmap) first — if the feature is already listed as deferred, you may be able to jump straight to a PR. For anything touching auth paths or verifying-key governance, open this issue and wait for maintainer input before writing code.
+
+  - type: dropdown
+    id: contract
+    attributes:
+      label: Affected contract(s)
+      multiple: true
+      options:
+        - registry
+        - credit-token
+        - zk-verifier
+        - marketplace
+        - retirement
+        - shared
+        - scripts / deploy tooling
+        - new contract
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What gap or limitation does this address? Link to related issues if any.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should change? Include rough interface sketches if you have them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why you rejected them.
+
+  - type: checkboxes
+    id: trust
+    attributes:
+      label: Trust / security impact
+      options:
+        - label: This change affects an authorization or access-control path
+        - label: This change affects verifying-key governance
+        - label: This change affects the ZK verifier
+        - label: No security impact
