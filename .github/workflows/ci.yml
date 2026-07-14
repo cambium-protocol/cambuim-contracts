@@ -25,6 +25,9 @@ jobs:
       - name: Add wasm32v1-none target
         run: rustup target add wasm32v1-none
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Install stellar-cli
         run: cargo install --locked stellar-cli
 
