@@ -18,3 +18,11 @@ publish = false
 
 [workspace.dependencies]
 soroban-sdk = "21"
+
+# Required by `stellar contract build` to prevent silent integer overflow
+# in Soroban contracts. Also applies overflow checks in WASM release builds.
+[profile.release]
+overflow-checks = true
+opt-level = "z"
+lto = true
+codegen-units = 1
