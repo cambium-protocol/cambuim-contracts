@@ -179,13 +179,18 @@ contracts/
 
 ## Prerequisites
 
-- Rust (stable, 1.79+) with the `wasm32-unknown-unknown` target
-- [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools) (`stellar-cli`), version compatible with Protocol 25+
+- Rust (stable, 1.79+) with the `wasm32v1-none` target (required for on-chain deployment)
+- [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools) (`stellar-cli`) v27+
 - A funded Stellar testnet account (for deployment/testing against live testnet)
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install --locked stellar-cli --features opt
+rustup target add wasm32v1-none
+```
+
+Install the latest stellar-cli binary from https://github.com/stellar/stellar-cli/releases or build from source:
+
+```bash
+cargo install --locked stellar-cli
 ```
 
 ---
@@ -211,14 +216,16 @@ stellar contract build
 Individual contract builds:
 
 ```bash
-cd credit-token && stellar contract build
+stellar contract build --package cambium-credit-token
 ```
 
-Optimize WASM output (recommended before deployment, reduces fees):
+WASM artifacts are written to `target/wasm32v1-none/release/`. Optimize before deployment to reduce on-chain fees:
 
 ```bash
-stellar contract optimize --wasm target/wasm32-unknown-unknown/release/credit_token.wasm
+stellar contract optimize --wasm target/wasm32v1-none/release/cambium_credit_token.wasm
 ```
+
+> **Note:** Do not use `cargo build --target wasm32-unknown-unknown` for contracts intended for deployment — use `stellar contract build` instead. The `stellar contract build` command targets `wasm32v1-none` and applies the compilation flags the Soroban runtime requires. The `wasm32-unknown-unknown` target produces WASM that the VM will reject at deploy time.
 
 ---
 
