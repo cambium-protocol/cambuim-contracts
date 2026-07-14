@@ -37,13 +37,13 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy (all targets, warnings = errors)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build WASM artifacts
         run: stellar contract build
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
   integration:
     name: Integration Tests
@@ -61,4 +61,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run integration tests
-        run: cargo test -p integration-tests
+        run: cargo test --locked -p integration-tests
