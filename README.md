@@ -263,23 +263,29 @@ cargo tarpaulin --workspace --out Html
 
 ## Deploying
 
-### Local sandbox / Testnet
+### Testnet — canonical addresses
+
+The contracts below are the canonical testnet deployment as of 2026-07-14. These addresses are the ones downstream services (`sdk-js`, `oracle-node`, `web-app`) should use.
+
+| Contract | Testnet address |
+|---|---|
+| `credit-token` | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` |
+| `zk-verifier` | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` |
+| `registry` | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` |
+| `marketplace` | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` |
+| `retirement` | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` |
+
+These are also recorded in [`DEPLOYMENTS.md`](./DEPLOYMENTS.md) and in `deployed-addresses.testnet.json` (written by the deploy script).
+
+### Running a fresh deployment
 
 ```bash
-# Configure network
-stellar network add testnet \
-  --rpc-url https://soroban-testnet.stellar.org \
-  --network-passphrase "Test SDF Network ; September 2015"
+# Create and fund deployer identity (testnet only — Friendbot is called automatically by the script)
+stellar keys generate test
 
-# Deploy registry first (other contracts depend on its address)
-stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/registry.wasm \
-  --source <YOUR_IDENTITY> \
-  --network testnet
-
-# Repeat for credit-token, zk-verifier, marketplace, retirement,
-# passing the registry contract ID into each as a constructor arg
-# where required. See scripts/deploy.sh for the full ordered sequence.
+# Deploy all five contracts in dependency order, wire them together, and
+# write deployed-addresses.testnet.json
+./scripts/deploy.sh testnet
 ```
 
 Use the provided script for a one-shot ordered deployment plus cross-contract wiring:
