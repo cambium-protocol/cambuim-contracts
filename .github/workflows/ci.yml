@@ -22,11 +22,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Add wasm32v1-none target
+        run: rustup target add wasm32v1-none
 
-      - name: Install Soroban CLI
-        run: cargo install --locked soroban-cli || true
+      - name: Install stellar-cli
+        run: cargo install --locked stellar-cli
 
       - uses: Swatinem/rust-cache@v2
 
@@ -37,7 +37,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Build WASM artifacts
-        run: cargo build --release --target wasm32-unknown-unknown
+        run: stellar contract build
 
       - name: Run tests
         run: cargo test --workspace
@@ -52,10 +52,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Add wasm32v1-none target
+        run: rustup target add wasm32v1-none
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Run integration tests
-        run: cargo test --test '*' -- workspace
+        run: cargo test -p integration-tests
