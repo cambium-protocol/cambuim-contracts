@@ -34,7 +34,7 @@ jobs:
       - name: Install stellar-cli
         run: |
           curl -fsSL \
-            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-v${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin stellar
           stellar --version
 
