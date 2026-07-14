@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use cambium_shared::{Error, RetireeRef};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol};

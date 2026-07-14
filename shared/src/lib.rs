@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN};
 

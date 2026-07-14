@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use cambium_shared::{Error, Proof};
 use soroban_sdk::{contract, contractimpl, contracttype, BytesN, Env, Vec};
