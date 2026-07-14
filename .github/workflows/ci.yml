@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  STELLAR_CLI_VERSION: "27.0.0"
 
 jobs:
   check:
@@ -17,8 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # rust-toolchain.toml in the repo root pins the channel, targets,
-      # and components (including rust-src, required by soroban-sdk testutils).
+      # rust-toolchain.toml in the repo root pins channel=stable,
+      # targets=[wasm32v1-none], and components including rust-src.
+      # rust-src is required by soroban-sdk's testutils feature.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -26,11 +28,15 @@ jobs:
           targets: wasm32v1-none
           components: rustfmt,clippy,rust-src
 
-      - name: Install system dependencies
-        run: sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
-
+      # Download the pre-built binary instead of compiling from source.
+      # Building stellar-cli from source takes ~10 min and pulls in native
+      # deps (libdbus, libudev, hidapi) that are not on the runner by default.
       - name: Install stellar-cli
-        run: cargo install --locked stellar-cli
+        run: |
+          curl -fsSL \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-v${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin stellar
+          stellar --version
 
       - uses: Swatinem/rust-cache@v2
 
