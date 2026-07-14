@@ -360,10 +360,22 @@ All state-changing calls emit Soroban events for indexing (used by `web-app` and
 
 ## Roadmap
 
-- [ ] Complete Groth16 verifier integration against `zk-circuits` v1 methodology circuits
-- [ ] Add STARK/RISC Zero verifier path for methodologies requiring larger, off-chain-heavy computation
+**Completed as of 2026-07-14 (testnet):**
+- [x] All five contracts deployed, initialized, and cross-wired on Stellar testnet (see [Deploying](#deploying))
+- [x] Full mint → trade → retire lifecycle tests pass end-to-end in the Soroban local sandbox
+- [x] AMM constant-product swap with slippage protection
+- [x] Retirement records stored and queryable; public retirement events emitted
+- [x] `zk-verifier` contract has the production-stable interface; current implementation is a mock that accepts any structurally valid proof (non-empty `proof_data` + ≥1 `public_input`)
+- [x] `registry` governance stub in place (`governance.rs`) with the correct interface signature; multi-sig + timelock implementation is deferred (see below)
+
+**Deferred — not yet implemented:**
+- [ ] Real Groth16 (BN254) proof verification wired to `zk-circuits` v1 methodology circuits — requires `zk-circuits` to publish verifying keys
+- [ ] Multi-sig + timelock governance for verifying-key updates in `registry/src/governance.rs` (highest-value attack surface — must be complete before mainnet)
+- [ ] Limit order book (`marketplace::place_limit_order`) — currently returns `Error::NotYetImplemented`; AMM swap is fully functional
+- [ ] Shielded retirement (`retirement::retire` with `shield=true`) — returns `Error::NotYetImplemented`; public retirement is fully functional
+- [ ] STARK/RISC Zero verifier path for methodologies requiring larger, off-chain-heavy computation
 - [ ] Compliance-market variant: optional KYC/allowlist gating on `credit-token` transfers, off by default
-- [ ] External audit (firm TBD) prior to mainnet deployment
+- [ ] External audit (firm TBD) — **required before mainnet deployment**
 - [ ] Formal verification of `registry` governance and `credit-token` mint authorization paths
 
 ---

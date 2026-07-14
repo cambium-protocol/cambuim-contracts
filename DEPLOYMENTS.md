@@ -4,37 +4,42 @@ Active deployments of Cambium Protocol contracts.
 
 ## Testnet
 
-> Last updated: Day 3 — pending deployment via `scripts/deploy.sh testnet`
+> Last updated: 2026-07-14 — canonical deployment via `scripts/deploy.sh testnet`
 
 | Contract | Address | Deployed |
 |---|---|---|
-| credit-token | _pending_ | — |
-| zk-verifier | _pending_ | — |
-| registry | _pending_ | — |
-| marketplace | _pending_ | — |
-| retirement | _pending_ | — |
+| credit-token | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` | 2026-07-14 |
+| zk-verifier  | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` | 2026-07-14 |
+| registry     | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` | 2026-07-14 |
+| marketplace  | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` | 2026-07-14 |
+| retirement   | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` | 2026-07-14 |
 
-### How to deploy
+These addresses are also recorded in the README's [Deploying](./README.md#deploying) section and
+in `deployed-addresses.testnet.json` (written by `scripts/deploy.sh`).
+
+### How to redeploy
 
 ```bash
-# 1. Fund deployer
-stellar keys add test   # if not already created
-curl "https://friendbot.stellar.org/?addr=$(stellar keys address test)"
+# 1. Generate and fund deployer identity (once per machine)
+stellar keys generate test
+stellar keys fund test --network testnet
 
-# 2. Deploy all contracts
+# 2. Deploy all contracts in dependency order, wire them, write addresses file
 ./scripts/deploy.sh testnet
 
 # 3. Verify deployment
 ./scripts/verify-deployment.sh testnet
 ```
 
+After a redeploy, update the address table above and the one in `README.md` to reflect
+the new canonical addresses, then notify downstream consumers (`sdk-js`, `oracle-node`, `web-app`).
+
 ### Addresses file
 
 After deployment, contract addresses are written to `deployed-addresses.testnet.json`.
 This file is consumed by `sdk-js` integration tests and `oracle-node` for cross-contract calls.
-
-**Do not commit this file to the repository** — it contains deployment-specific state.
-The README will be updated with stable addresses on Day 5.
+It is **not** committed to the repository — the README and this file are the source of truth
+for stable addresses.
 
 ## Local Sandbox
 
@@ -45,5 +50,5 @@ The README will be updated with stable addresses on Day 5.
 
 ## Mainnet
 
-> **Not yet deployed.** Requires completed independent security audit (see SECURITY.md)
+> **Not yet deployed.** Requires completed independent security audit (see [SECURITY.md](./SECURITY.md))
 > and multi-sig-controlled deployer keys. Do not deploy unaudited contracts to mainnet.
