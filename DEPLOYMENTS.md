@@ -6,13 +6,13 @@ Active deployments of Cambium Protocol contracts.
 
 > Last updated: 2026-07-14 — canonical deployment via `scripts/deploy.sh testnet`
 
-| Contract | Address | Deployed |
-|---|---|---|
-| credit-token | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` | 2026-07-14 |
-| zk-verifier  | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` | 2026-07-14 |
-| registry     | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` | 2026-07-14 |
-| marketplace  | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` | 2026-07-14 |
-| retirement   | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` | 2026-07-14 |
+| Contract | Address | Explorer | Deployed |
+|---|---|---|---|
+| credit-token | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` | [↗](https://stellar.expert/explorer/testnet/contract/CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36) | 2026-07-14 |
+| zk-verifier  | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` | [↗](https://stellar.expert/explorer/testnet/contract/CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7) | 2026-07-14 |
+| registry     | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` | [↗](https://stellar.expert/explorer/testnet/contract/CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43) | 2026-07-14 |
+| marketplace  | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` | [↗](https://stellar.expert/explorer/testnet/contract/CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7) | 2026-07-14 |
+| retirement   | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` | [↗](https://stellar.expert/explorer/testnet/contract/CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5) | 2026-07-14 |
 
 These addresses are also recorded in the README's [Deploying](./README.md#deploying) section and
 in `deployed-addresses.testnet.json` (written by `scripts/deploy.sh`).

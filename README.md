@@ -267,13 +267,13 @@ cargo tarpaulin --workspace --out Html
 
 The contracts below are the canonical testnet deployment as of 2026-07-14. These addresses are the ones downstream services (`sdk-js`, `oracle-node`, `web-app`) should use.
 
-| Contract | Testnet address |
-|---|---|
-| `credit-token` | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` |
-| `zk-verifier` | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` |
-| `registry` | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` |
-| `marketplace` | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` |
-| `retirement` | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` |
+| Contract | Testnet address | Explorer |
+|---|---|---|
+| `credit-token` | `CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36` | [↗](https://stellar.expert/explorer/testnet/contract/CBRBMYB6UTJEMMSBQQPYHAIO5QWJAT4EBPIFTEEB6MRY6ZZD5NS5KY36) |
+| `zk-verifier` | `CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7` | [↗](https://stellar.expert/explorer/testnet/contract/CDHHVK26VAEP4APPELQLJQLZUKMCDSXGBWT7K6V7L7T6CHHRDY2MUAD7) |
+| `registry` | `CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43` | [↗](https://stellar.expert/explorer/testnet/contract/CBSLLVCIZBXKPHY73PN5DVHQKNGK4FAZBXMQLKZCJABABUX5OQGPHC43) |
+| `marketplace` | `CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7` | [↗](https://stellar.expert/explorer/testnet/contract/CAKXZQTCVDSGVF2BU5FY636O4TDCAX5UJCWYGQKDKMOA5QNBDKPXZ5S7) |
+| `retirement` | `CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5` | [↗](https://stellar.expert/explorer/testnet/contract/CDIHLUARSMSYU27QRKXBWVK5HXIJRUAQ3SYQYCK3MZ2UKMCRB275H3G5) |
 
 These are also recorded in [`DEPLOYMENTS.md`](./DEPLOYMENTS.md) and in `deployed-addresses.testnet.json` (written by the deploy script).
 
