@@ -152,6 +152,7 @@ dependencies = [
 name = "cambium-retirement"
 version = "0.1.0"
 dependencies = [
+ "cambium-credit-token",
  "cambium-shared",
  "soroban-sdk",
 ]

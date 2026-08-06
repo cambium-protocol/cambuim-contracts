@@ -246,6 +246,41 @@ fn burn_by_admin_succeeds() {
     assert_eq!(c.balance(&user), 600);
 }
 
+/// Once a burner contract is configured, only it (not the admin) may burn.
+#[test]
+fn burn_by_burner_succeeds() {
+    let (env, _admin, user, contract_id) = setup();
+    let c = client(&env, &contract_id);
+    let burner = Address::generate(&env);
+
+    c.mint(&user, &1000);
+    c.set_burner(&burner);
+    assert_eq!(c.get_burner(), Some(burner.clone()));
+
+    // With a burner set, the burner contract burns; admin no longer can.
+    // (mock_all_auths makes burner.require_auth() pass regardless of caller.)
+    c.burn(&user, &300);
+    assert_eq!(c.balance(&user), 700);
+}
+
+#[test]
+fn set_burner_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, CreditTokenContract);
+    let c = CreditTokenContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    c.initialize(&admin);
+
+    // Remove mocked auths — set_burner must now fail without admin auth.
+    env.set_auths(&[]);
+    let burner = Address::generate(&env);
+    let result = c.try_set_burner(&burner);
+    assert!(result.is_err(), "set_burner must fail without admin auth");
+    assert_eq!(c.get_burner(), None);
+}
+
 /// Non-admin burn must be rejected — 100% auth path coverage.
 #[test]
 fn burn_unauthorized_fails_without_admin_auth() {

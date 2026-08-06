@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 use cambium_shared::{Error, RetireeRef};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol};
 
 /// A retirement record storing details about a credit retirement event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +83,25 @@ impl RetirementContract {
         }
 
         from.require_auth();
+
+        // Permanently burn the retired credits before recording the event.
+        // `credit_token::burn` is authorized to this contract (the burner),
+        // and `from`'s authorization was validated above. Any burn failure
+        // (e.g. insufficient balance) aborts the retirement.
+        let credit_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CreditToken)
+            .expect("not initialized");
+        let burn_result: Result<Result<(), _>, _> = env
+            .try_invoke_contract::<(), soroban_sdk::Error>(
+                &credit_token,
+                &Symbol::new(&env, "burn"),
+                soroban_sdk::vec![&env, from.into_val(&env), amount.into_val(&env)],
+            );
+        if !matches!(burn_result, Ok(Ok(()))) {
+            return Err(Error::InsufficientBalance);
+        }
 
         // Generate a unique retirement record ID
         let mut id_bytes = soroban_sdk::Bytes::new(&env);

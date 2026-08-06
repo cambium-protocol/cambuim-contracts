@@ -11,6 +11,9 @@ pub enum DataKey {
     Balance(Address),
     Allowance(Address, Address),
     Admin,
+    /// Address of the contract authorized to burn tokens (the retirement
+    /// contract). Set by the admin via `set_burner`.
+    Burner,
 }
 
 #[contracterror]
@@ -181,10 +184,38 @@ impl CreditTokenContract {
         Ok(())
     }
 
-    /// Burn `amount` tokens from `from`.
+    /// Set the address authorized to burn tokens on behalf of holders.
+    ///
+    /// This is the retirement contract: it burns credits permanently and is
+    /// expected to validate the holder's authorization (`from.require_auth()`)
+    /// itself before calling `burn`.
     ///
     /// # Authorization
     /// Only callable by the admin address (the registry contract).
+    pub fn set_burner(env: Env, burner: Address) -> Result<(), TokenError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Burner, &burner);
+        Ok(())
+    }
+
+    /// Return the authorized burner contract address, if one has been set.
+    pub fn get_burner(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Burner)
+    }
+
+    /// Burn `amount` tokens from `from`.
+    ///
+    /// # Authorization
+    /// If a burner contract has been configured (via `set_burner`), only that
+    /// contract may burn — it must have validated `from`'s authorization
+    /// itself (see `retirement::retire`). Otherwise, only the admin address
+    /// (the registry contract) may burn.
     pub fn burn(env: Env, from: Address, amount: i128) -> Result<(), TokenError> {
         if amount <= 0 {
             return Err(TokenError::NegativeAmount);
@@ -196,7 +227,11 @@ impl CreditTokenContract {
             .get(&DataKey::Admin)
             .expect("not initialized");
 
-        admin.require_auth();
+        let burner: Option<Address> = env.storage().instance().get(&DataKey::Burner);
+        match burner {
+            Some(b) => b.require_auth(),
+            None => admin.require_auth(),
+        }
 
         let from_balance = Self::balance(env.clone(), from.clone());
         if from_balance < amount {

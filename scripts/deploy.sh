@@ -207,6 +207,15 @@ stellar contract invoke \
     --credit_token "${CREDIT_TOKEN_ADDR}" \
     --registry "${REGISTRY_ADDR}"
 
+# Authorize the retirement contract to burn credits permanently.
+echo "Setting credit-token burner (retirement: ${RETIREMENT_ADDR})..."
+stellar contract invoke \
+    --id "${CREDIT_TOKEN_ADDR}" \
+    --source "${SOURCE}" \
+    --network "${NETWORK}" \
+    -- set_burner \
+    --burner "${RETIREMENT_ADDR}"
+
 echo ""
 echo "=== Writing ${OUTPUT_FILE} ==="
 

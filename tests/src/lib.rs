@@ -52,6 +52,9 @@ fn deploy_all() -> (
     // Wire registry: credit-token and zk-verifier
     registry_client.initialize(&credit_token_id, &zk_verifier_id);
 
+    // Authorize the retirement contract to burn credits.
+    token_client.set_burner(&retirement_id);
+
     (
         env,
         registry_id,
