@@ -1,10 +1,12 @@
 use cambium_credit_token::CreditTokenContract;
 use cambium_shared::Proof;
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, Symbol};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, BytesN, Env, Symbol,
+};
 
 use super::{Project, RegistryContract, RegistryContractClient, Vintage};
 use cambium_shared::Error;
-
 /// Register both the registry and credit-token contracts and wire them together.
 /// Returns (env, registry_contract_address, registry_client, credit_token_contract_address).
 fn setup() -> (Env, Address, RegistryContractClient<'static>, Address) {
@@ -279,4 +281,198 @@ fn request_mint_issues_tokens_to_registry() {
 
     // Registry (the caller of mint) should hold the minted tokens.
     assert_eq!(token_client.balance(&registry_addr), 1000);
+}
+
+// ---- governance tests ----
+
+fn governance_setup() -> (
+    Env,
+    RegistryContractClient<'static>,
+    soroban_sdk::Vec<Address>,
+) {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
+    client.init_governance(&2, &signers, &3600);
+    (env, client, signers)
+}
+
+#[test]
+fn init_governance_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let registry_id = env.register_contract(None, RegistryContract);
+    let client = RegistryContractClient::new(&env, &registry_id);
+
+    let signers = soroban_sdk::vec![
+        &env,
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    ];
+    client.init_governance(&2, &signers, &3600);
+
+    let config = client.get_governance();
+    assert_eq!(config.threshold, 2);
+    assert_eq!(config.signers.len(), 3);
+    assert_eq!(config.timelock_secs, 3600);
+}
+
+#[test]
+fn init_governance_validates_config() {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+
+    // threshold 0
+    let signers = soroban_sdk::vec![&env, Address::generate(&env)];
+    assert_eq!(
+        client.try_init_governance(&0, &signers, &3600),
+        Err(Ok(Error::InvalidConfig))
+    );
+
+    // threshold > signers
+    let signers2 = soroban_sdk::vec![&env, Address::generate(&env)];
+    assert_eq!(
+        client.try_init_governance(&2, &signers2, &3600),
+        Err(Ok(Error::InvalidConfig))
+    );
+
+    // empty signers
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+    assert_eq!(
+        client.try_init_governance(&1, &empty, &3600),
+        Err(Ok(Error::InvalidConfig))
+    );
+
+    // zero timelock
+    let signers3 = soroban_sdk::vec![&env, Address::generate(&env)];
+    assert_eq!(
+        client.try_init_governance(&1, &signers3, &0),
+        Err(Ok(Error::InvalidConfig))
+    );
+}
+
+#[test]
+fn init_governance_panics_on_double_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let registry_id = env.register_contract(None, RegistryContract);
+    let client = RegistryContractClient::new(&env, &registry_id);
+
+    let signers = soroban_sdk::vec![&env, Address::generate(&env)];
+    client.init_governance(&1, &signers, &3600);
+
+    let result = client.try_init_governance(&1, &signers, &3600);
+    assert!(result.is_err(), "double init_governance must panic");
+}
+
+#[test]
+fn get_vkey_returns_zero_default() {
+    let (_env, client, _signers) = governance_setup();
+    let vkey = client.get_vkey(&Symbol::new(&_env, "VM0007"));
+    assert_eq!(vkey.version, 0);
+}
+
+#[test]
+fn propose_requires_signer() {
+    let (env, client, _signers) = governance_setup();
+    let outsider = Address::generate(&env);
+    let new_key = BytesN::from_array(&env, &[7u8; 32]);
+    let result = client.try_propose_vkey_update(&outsider, &Symbol::new(&env, "VM0007"), &new_key);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn full_governance_flow_updates_vkey() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let s2 = signers.get(1).unwrap();
+    let methodology = Symbol::new(&env, "VM0007");
+    let new_key = BytesN::from_array(&env, &[7u8; 32]);
+
+    // Propose (signer 1)
+    let proposal_id = client.propose_vkey_update(&s1, &methodology, &new_key);
+    assert_ne!(proposal_id, BytesN::from_array(&env, &[0u8; 32]));
+
+    // Not enough approvals -> cannot execute
+    assert_eq!(
+        client.try_execute_vkey_update(&proposal_id),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+
+    // Approve with signer 2 -> threshold (2) reached
+    let approvals = client.approve_vkey_update(&s2, &proposal_id);
+    assert_eq!(approvals, 2);
+
+    // Timelock not elapsed -> cannot execute
+    assert_eq!(
+        client.try_execute_vkey_update(&proposal_id),
+        Err(Ok(Error::TimelockPending))
+    );
+
+    // Fast-forward the ledger past the timelock and execute.
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    let vkey = client.execute_vkey_update(&proposal_id);
+    assert_eq!(vkey.version, 1);
+    assert_eq!(vkey.key, new_key);
+
+    // The canonical key is stored per methodology.
+    let canonical = client.get_vkey(&methodology);
+    assert_eq!(canonical.version, 1);
+    assert_eq!(canonical.key, new_key);
+
+    // Executing again is rejected.
+    assert_eq!(
+        client.try_execute_vkey_update(&proposal_id),
+        Err(Ok(Error::OrderClosed))
+    );
+}
+
+#[test]
+fn governance_requires_threshold_not_all_signers() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let methodology = Symbol::new(&env, "ARR");
+    let new_key = BytesN::from_array(&env, &[9u8; 32]);
+
+    let proposal_id = client.propose_vkey_update(&s1, &methodology, &new_key);
+
+    // Proposing counts as signer 1's approval; a second vote is rejected.
+    let result = client.try_approve_vkey_update(&s1, &proposal_id);
+    assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
+
+    // Only one approval exists, so the threshold (2) is never reached —
+    // even after the timelock elapses the update cannot execute.
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    assert_eq!(
+        client.try_execute_vkey_update(&proposal_id),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+}
+
+#[test]
+fn approve_requires_signer() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let proposal_id = client.propose_vkey_update(
+        &s1,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[7u8; 32]),
+    );
+
+    let outsider = Address::generate(&env);
+    let result = client.try_approve_vkey_update(&outsider, &proposal_id);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn approve_missing_proposal_fails() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let missing = BytesN::from_array(&env, &[99u8; 32]);
+    let result = client.try_approve_vkey_update(&s1, &missing);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
 }

@@ -61,4 +61,14 @@ pub enum Error {
     PoolNotFound = 9,
     /// The retirement record was not found.
     RetirementNotFound = 10,
+    /// Retiring more credits than were issued for a vintage.
+    ExceedsIssued = 11,
+    /// The limit order is closed (cancelled or fully filled).
+    OrderClosed = 12,
+    /// A governance update was approved but the timelock has not elapsed.
+    TimelockPending = 13,
+    /// A governance update has not yet reached the required approvals.
+    ThresholdNotMet = 14,
+    /// A configuration value is invalid (e.g. governance threshold/signers).
+    InvalidConfig = 15,
 }
