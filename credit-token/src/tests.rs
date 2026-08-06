@@ -467,7 +467,10 @@ fn allowlist_gates_burn() {
 
 // ---- event tests ----
 
-fn last_event_topics(env: &Env, expected_len: u32) -> (soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val) {
+fn last_event_topics(
+    env: &Env,
+    expected_len: u32,
+) -> (soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val) {
     let events = env.events().all();
     let (_, topics, data) = events.last().unwrap();
     assert_eq!(topics.len(), expected_len);

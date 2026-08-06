@@ -77,7 +77,7 @@ Cambium Protocol is split into five cooperating contracts rather than one monoli
 Tracks the canonical metadata for every carbon project and vintage issued on Cambium: project ID, methodology (e.g. VM0007, ARR, biochar), geography, vintage year, registry cross-reference (Verra/Gold Standard project ID, if bridging an existing credit), and total issued/retired supply. This is the "source of truth" other contracts read from before allowing a mint.
 
 ### 2. `credit-token`
-A SEP-41-compliant fungible token contract representing carbon credits. Each token unit represents a fixed fraction of one metric ton of CO2e (configurable per deployment, default: 1 unit = 0.001 tCO2e, enabling fine-grained fractional trading). Minting is only callable by the `registry` contract after proof verification; it cannot be minted arbitrarily by any single key.
+A SEP-41-compliant fungible token contract representing carbon credits. Each token unit represents a fixed fraction of one metric ton of CO2e (configurable per deployment, default: 1 unit = 0.001 tCO2e, enabling fine-grained fractional trading). Minting is only callable by the `registry` contract after proof verification; it cannot be minted arbitrarily by any single key. An optional compliance allowlist can be enabled by the admin to restrict transfers/mints to addresses explicitly added via `set_allowlisted` — off by default.
 
 ### 3. `zk-verifier`
 Wraps Soroban's native BN254 host functions (available since Protocol 25 / "X-Ray") to verify Groth16 proofs submitted by `oracle-node`. Given a proof and its public inputs (project ID, claimed reduction amount, methodology hash, time window), it returns whether the proof is valid against a stored verifying key. Verifying keys are versioned per methodology and can only be updated through the `registry` contract's governance path (see [Trust assumptions](#trust-assumptions)).
@@ -85,7 +85,7 @@ Wraps Soroban's native BN254 host functions (available since Protocol 25 / "X-Ra
 ### 4. `marketplace`
 Provides two trading paths:
 - A **constant-product AMM pool** (credit ↔ USDC or credit ↔ XLM) for instant liquidity and price discovery on smaller trades.
-- A **limit order book** for larger trades where price slippage from an AMM would be unacceptable.
+- A **limit order book** for larger trades where price slippage from an AMM would be unacceptable. Orders escrow the sold asset upfront, sweep crossing resting orders at the maker price, and can be cancelled with a full escrow refund.
 
 Both paths respect fractional amounts down to the token's minimum unit.
 
@@ -134,7 +134,7 @@ Being explicit about this is a project design principle, not an afterthought:
 | Component | Trust assumption |
 |---|---|
 | `zk-verifier` proof validity | The proof mathematically guarantees the *circuit* was satisfied. It does **not** guarantee the real-world inputs the oracle fed into the circuit were true — that's a trust assumption on `oracle-node`'s data sources (see that repo's README). |
-| Verifying key updates | Restricted to a multi-sig governance address (see `registry/src/governance.rs`). A compromised or malicious key update could let invalid proofs verify — this is the single highest-value attack surface in the system. |
+| Verifying key updates | Restricted to a governance multi-sig: updates require a configured number of signer approvals and a timelock delay before execution (see `registry/src/governance.rs`). A compromised or malicious key update could let invalid proofs verify — this is the single highest-value attack surface in the system. |
 | Bridged (wrapped) credits | If a credit is tokenized from an existing registry (Verra, Gold Standard) rather than natively issued, Cambium is only as trustworthy as that underlying registry and the custodian attesting to the wrap. This is clearly flagged per-project via `external_registry_ref`. |
 | Oracle liveness | If `oracle-node` operators go offline, no new credits can be minted, but existing trading/retirement is unaffected. |
 
@@ -311,11 +311,17 @@ Abbreviated public interfaces (see each contract's `lib.rs` for full signatures 
 fn register_project(env: Env, project: Project) -> Result<(), Error>;
 fn request_mint(env: Env, project_id: BytesN<32>, vintage_year: u32,
                  amount: i128, proof: Proof) -> Result<(), Error>;
-fn update_verifying_key(env: Env, methodology: Symbol,
-                         new_key: BytesN<32>) -> Result<(), Error>; // governance-gated
+// governance-gated verifying-key updates (multi-sig + timelock)
+fn propose_vkey_update(env: Env, signer: Address, methodology: Symbol,
+                        new_key: BytesN<32>) -> Result<BytesN<32>, Error>;
+fn approve_vkey_update(env: Env, signer: Address, proposal_id: BytesN<32>)
+    -> Result<u32, Error>; // returns total approvals
+fn execute_vkey_update(env: Env, proposal_id: BytesN<32>) -> Result<VkeyState, Error>;
 
 // credit-token (SEP-41 standard interface, plus:)
 fn mint(env: Env, to: Address, amount: i128) -> Result<(), Error>;  // registry-only caller
+fn enable_allowlist(env: Env, enabled: bool) -> Result<(), Error>;   // admin-only, off by default
+fn set_allowlisted(env: Env, address: Address, allowed: bool) -> Result<(), Error>;
 
 // zk-verifier
 fn verify(env: Env, proof: Proof, public_inputs: Vec<BytesN<32>>) -> Result<bool, Error>;
@@ -323,13 +329,15 @@ fn verify(env: Env, proof: Proof, public_inputs: Vec<BytesN<32>>) -> Result<bool
 // marketplace
 fn swap(env: Env, pool_id: BytesN<32>, amount_in: i128,
         min_amount_out: i128) -> Result<i128, Error>;
-fn place_limit_order(env: Env, side: OrderSide, amount: i128,
-                      price: i128) -> Result<OrderId, Error>;
+fn place_limit_order(env: Env, trader: Address, side: OrderSide, amount: i128,
+                      price: i128, pool_id: BytesN<32>,
+                      paired_token: Address) -> Result<BytesN<32>, Error>;
+fn cancel_order(env: Env, trader: Address, order_id: BytesN<32>) -> Result<(), Error>;
 
 // retirement
 fn retire(env: Env, from: Address, project_id: BytesN<32>,
-          vintage_year: u32, amount: i128,
-          shield: bool) -> Result<RetirementRecord, Error>;
+          vintage_year: u32, amount: i128, shield: bool,
+          nullifier: BytesN<32>) -> Result<RetirementRecord, Error>;
 fn get_retirement(env: Env, id: BytesN<32>) -> Result<RetirementRecord, Error>;
 ```
 
@@ -341,9 +349,12 @@ All state-changing calls emit Soroban events for indexing (used by `web-app` and
 
 | Event topic | Emitted by | Payload |
 |---|---|---|
-| `mint` | `credit-token` | `(project_id, vintage_year, amount, recipient)` |
+| `transfer` | `credit-token` | `(from, to, amount)` |
+| `approve` | `credit-token` | `(from, spender, amount)` |
+| `mint` | `credit-token` | `(admin, recipient, amount)` |
+| `burn` | `credit-token` | `(admin, holder, amount)` |
 | `swap` | `marketplace` | `(pool_id, amount_in, amount_out, trader)` |
-| `retire` | `retirement` | `(project_id, vintage_year, amount, retiree_or_shielded_ref)` |
+| `retire` | `retirement` | `(project_id, vintage_year, amount, retiree_or_shielded_ref)` — caller omitted when shielded |
 | `vkey_updated` | `registry` | `(methodology, new_key_version)` |
 
 ---
@@ -364,17 +375,16 @@ All state-changing calls emit Soroban events for indexing (used by `web-app` and
 - [x] All five contracts deployed, initialized, and cross-wired on Stellar testnet (see [Deploying](#deploying))
 - [x] Full mint → trade → retire lifecycle tests pass end-to-end in the Soroban local sandbox
 - [x] AMM constant-product swap with slippage protection
-- [x] Retirement records stored and queryable; public retirement events emitted
+- [x] Retirement records stored and queryable; public retirement events emitted; burning verified against the credit-token supply
 - [x] `zk-verifier` contract has the production-stable interface; current implementation is a mock that accepts any structurally valid proof (non-empty `proof_data` + ≥1 `public_input`)
-- [x] `registry` governance stub in place (`governance.rs`) with the correct interface signature; multi-sig + timelock implementation is deferred (see below)
+- [x] Multi-sig + timelock governance for verifying-key updates in `registry/src/governance.rs` (propose → approve → execute after timelock)
+- [x] Limit order book in `marketplace` with upfront escrow, crossing-order sweep at maker price, partial fills, and cancel/refund
+- [x] Shielded retirement (`retirement::retire` with `shield=true`) — records only a nullifier, rejects replay of a spent nullifier, and omits the caller from events
+- [x] Compliance allowlist on `credit-token` (`enable_allowlist` / `set_allowlisted`) — optional KYC/allowlist gating on transfers, off by default
 
 **Deferred — not yet implemented:**
 - [ ] Real Groth16 (BN254) proof verification wired to `zk-circuits` v1 methodology circuits — requires `zk-circuits` to publish verifying keys
-- [ ] Multi-sig + timelock governance for verifying-key updates in `registry/src/governance.rs` (highest-value attack surface — must be complete before mainnet)
-- [ ] Limit order book (`marketplace::place_limit_order`) — currently returns `Error::NotYetImplemented`; AMM swap is fully functional
-- [ ] Shielded retirement (`retirement::retire` with `shield=true`) — returns `Error::NotYetImplemented`; public retirement is fully functional
 - [ ] STARK/RISC Zero verifier path for methodologies requiring larger, off-chain-heavy computation
-- [ ] Compliance-market variant: optional KYC/allowlist gating on `credit-token` transfers, off by default
 - [ ] External audit (firm TBD) — **required before mainnet deployment**
 - [ ] Formal verification of `registry` governance and `credit-token` mint authorization paths
 
