@@ -16,3 +16,4 @@ cambium-shared = { path = "../shared" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+cambium-credit-token = { path = "../credit-token", features = ["testutils"] }

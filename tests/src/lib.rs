@@ -192,17 +192,63 @@ fn verifier_mock_always_passes() {
     assert!(result);
 }
 
-/// Test that marketplace place_limit_order returns NotYetImplemented.
+/// Test the limit order book end-to-end: a resting sell order is taken by a
+/// crossing buy order and both escrows settle.
 #[test]
-fn marketplace_orderbook_deferred() {
-    let (env, _registry_id, _credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
+fn orderbook_sell_then_buy_settles() {
+    let (env, _registry_id, credit_token_id, _zk_verifier_id, marketplace_id, _retirement_id) =
         deploy_all();
 
+    let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
     let marketplace_client =
         cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
-    let result =
-        marketplace_client.try_place_limit_order(&cambium_shared::OrderSide::Buy, &100, &10);
-    assert_eq!(result, Err(Ok(cambium_shared::Error::NotYetImplemented)));
+
+    // Deploy a second credit-token to act as the paired asset.
+    let paired_token_id = env.register_contract(None, CreditTokenContract);
+    let paired_client =
+        cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
+    paired_client.initialize(&soroban_sdk::Address::generate(&env));
+
+    // Create a pool for the order book to reference.
+    let pool_id = BytesN::from_array(&env, &[3u8; 32]);
+    marketplace_client.create_pool(
+        &pool_id,
+        &credit_token_id,
+        &Symbol::new(&env, "USDC"),
+        &1000,
+        &5000,
+    );
+
+    let seller = soroban_sdk::Address::generate(&env);
+    let buyer = soroban_sdk::Address::generate(&env);
+    token_client.mint(&seller, &1000);
+    paired_client.mint(&buyer, &10000);
+
+    marketplace_client.place_limit_order(
+        &seller,
+        &cambium_shared::OrderSide::Sell,
+        &100,
+        &10,
+        &pool_id,
+        &paired_token_id,
+    );
+    marketplace_client.place_limit_order(
+        &buyer,
+        &cambium_shared::OrderSide::Buy,
+        &100,
+        &10,
+        &pool_id,
+        &paired_token_id,
+    );
+
+    // Escrows settled: seller paid credits, received paired; buyer vice versa.
+    assert_eq!(token_client.balance(&seller), 900);
+    assert_eq!(paired_client.balance(&seller), 1000);
+    assert_eq!(token_client.balance(&buyer), 100);
+    assert_eq!(paired_client.balance(&buyer), 9000);
+
+    // Book is empty after the cross.
+    assert_eq!(marketplace_client.get_orders(&pool_id).len(), 0);
 }
 
 /// Test duplicate project registration fails.

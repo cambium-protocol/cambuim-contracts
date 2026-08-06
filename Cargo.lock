@@ -134,6 +134,7 @@ dependencies = [
 name = "cambium-marketplace"
 version = "0.1.0"
 dependencies = [
+ "cambium-credit-token",
  "cambium-shared",
  "soroban-sdk",
 ]
