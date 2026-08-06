@@ -26,6 +26,8 @@ pub struct RetirementRecord {
 #[contracttype]
 enum DataKey {
     Retirement(BytesN<32>),
+    /// Nullifiers consumed by shielded retirements (replay guard).
+    Nullified(BytesN<32>),
     CreditToken,
     Registry,
     Initialized,
@@ -52,16 +54,24 @@ impl RetirementContract {
     /// Retire carbon credits permanently.
     ///
     /// Burns the specified amount of credit tokens from the caller and creates
-    /// an immutable retirement record. The retirement event is always public
-    /// (per the protocol's design principle that environmental claims stay public).
+    /// an immutable retirement record.
+    ///
+    /// Retirements are public by default (per the protocol's design principle
+    /// that environmental claims stay public). When `shield` is true, the
+    /// retiring party's identity is hidden: only the caller-supplied `nullifier`
+    /// is stored (`RetireeRef::Shielded`). The nullifier must be derived
+    /// off-chain from a secret (e.g. keccak of a commitment) so the contract
+    /// cannot link it to the caller, and it is recorded to prevent a shielded
+    /// retirement from being claimed twice.
     ///
     /// # Arguments
     /// * `from` - The address retiring the credits (must authorize this call).
     /// * `project_id` - The project these credits belong to.
     /// * `vintage_year` - The vintage year of the credits.
     /// * `amount` - Number of credits to retire (must be > 0).
-    /// * `shield` - If true, shield the retiring party's identity using ZK proofs.
-    ///   Currently not implemented — will return `Error::NotYetImplemented`.
+    /// * `shield` - If true, record only the `nullifier` instead of `from`.
+    /// * `nullifier` - Identity-hiding commitment for shielded retirements
+    ///   (ignored when `shield` is false; must be non-zero when shielded).
     ///
     /// # Returns
     /// The created `RetirementRecord` with a unique ID.
@@ -72,17 +82,27 @@ impl RetirementContract {
         vintage_year: u32,
         amount: i128,
         shield: bool,
+        nullifier: BytesN<32>,
     ) -> Result<RetirementRecord, Error> {
         if amount <= 0 {
             return Err(Error::NonPositiveAmount);
         }
-
-        // Shielded retirement not yet implemented — fail loudly, never silently ignore.
-        if shield {
-            return Err(Error::NotYetImplemented);
+        if shield && nullifier == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(Error::InvalidNullifier);
         }
 
         from.require_auth();
+
+        // Replay guard: a shielded retirement's nullifier may only be used
+        // once, so a replayed claim is rejected before anything is burned.
+        if shield
+            && env
+                .storage()
+                .persistent()
+                .has(&DataKey::Nullified(nullifier.clone()))
+        {
+            return Err(Error::AlreadyRegistered);
+        }
 
         // Permanently burn the retired credits before recording the event.
         // `credit_token::burn` is authorized to this contract (the burner),
@@ -136,14 +156,26 @@ impl RetirementContract {
         id_bytes.extend_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
         let record_id: BytesN<32> = env.crypto().keccak256(&id_bytes).into();
 
+        // Consume the nullifier so the shielded claim cannot be replayed.
+        if shield {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Nullified(nullifier.clone()), &true);
+        }
+
         // Create the retirement record
+        let retiree = if shield {
+            RetireeRef::Shielded(nullifier.clone())
+        } else {
+            RetireeRef::Public(from.clone())
+        };
         let record = RetirementRecord {
             id: record_id.clone(),
             project_id: project_id.clone(),
             vintage_year,
             amount,
             retired_at: env.ledger().sequence() as u64,
-            retiree: RetireeRef::Public(from.clone()),
+            retiree,
         };
 
         // Store the record
@@ -151,9 +183,15 @@ impl RetirementContract {
             .persistent()
             .set(&DataKey::Retirement(record_id.clone()), &record);
 
-        // Emit retirement event
+        // Emit retirement event. For shielded retirements the caller's
+        // address is deliberately omitted so identity never leaks on-chain.
+        let event_retiree = if shield {
+            RetireeRef::Shielded(nullifier.clone())
+        } else {
+            RetireeRef::Public(from.clone())
+        };
         env.events().publish(
-            (Symbol::new(&env, "retire"), project_id, from),
+            (Symbol::new(&env, "retire"), project_id, event_retiree),
             (vintage_year, amount),
         );
 

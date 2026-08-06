@@ -58,6 +58,14 @@ fn sample_project_id(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[1u8; 32])
 }
 
+fn zero(env: &Env) -> BytesN<32> {
+    BytesN::from_array(env, &[0u8; 32])
+}
+
+fn nullifier(env: &Env) -> BytesN<32> {
+    BytesN::from_array(env, &[42u8; 32])
+}
+
 fn sample_proof(env: &Env) -> Proof {
     Proof {
         proof_data: Bytes::from_array(env, &[1u8, 2, 3, 4]),
@@ -89,13 +97,14 @@ fn fund(stack: &Stack, from: &Address, amount: i128) {
 #[test]
 fn initialize_sets_addresses() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
     // This should not panic — retire succeeds after initialization
-    let _record = client.retire(&from, &project_id, &2025, &100, &false);
+    let _record = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
 }
 
 #[test]
@@ -118,12 +127,13 @@ fn initialize_panics_on_double_init() {
 #[test]
 fn retire_succeeds() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
-    let record = client.retire(&from, &project_id, &2025, &100, &false);
+    let record = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
 
     assert_eq!(record.project_id, project_id);
     assert_eq!(record.vintage_year, 2025);
@@ -134,13 +144,14 @@ fn retire_succeeds() {
 #[test]
 fn retire_burns_tokens() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
     let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
 
-    let record = client.retire(&from, &project_id, &2025, &400, &false);
+    let record = client.retire(&from, &project_id, &2025, &400, &false, &zero(env));
 
     // 400 credits were permanently burned.
     assert_eq!(token_client.balance(&from), 600);
@@ -150,13 +161,14 @@ fn retire_burns_tokens() {
 #[test]
 fn retire_updates_vintage_totals() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
     let registry_client = RegistryContractClient::new(&stack.env, &stack.registry_id);
 
-    client.retire(&from, &project_id, &2025, &400, &false);
+    client.retire(&from, &project_id, &2025, &400, &false, &zero(env));
 
     let vintage = registry_client.get_vintage(&project_id, &2025);
     assert_eq!(vintage.total_issued, 1000);
@@ -166,26 +178,28 @@ fn retire_updates_vintage_totals() {
 #[test]
 fn retire_cannot_exceed_issued_supply() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 500);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
     // 500 were issued and held; retiring 1000 must fail.
-    let result = client.try_retire(&from, &project_id, &2025, &1000, &false);
+    let result = client.try_retire(&from, &project_id, &2025, &1000, &false, &zero(env));
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
 }
 
 #[test]
 fn retire_insufficient_balance_fails() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 100);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
     let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
 
-    let result = client.try_retire(&from, &project_id, &2025, &200, &false);
+    let result = client.try_retire(&from, &project_id, &2025, &200, &false, &zero(env));
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
 
     // No record was created and no tokens were lost.
@@ -195,12 +209,13 @@ fn retire_insufficient_balance_fails() {
 #[test]
 fn retire_creates_stored_record() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
-    let record = client.retire(&from, &project_id, &2025, &100, &false);
+    let record = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
     let fetched = client.get_retirement(&record.id);
 
     assert_eq!(fetched, record);
@@ -209,42 +224,112 @@ fn retire_creates_stored_record() {
 #[test]
 fn retire_zero_amount_fails() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
-    let result = client.try_retire(&from, &project_id, &2025, &0, &false);
+    let result = client.try_retire(&from, &project_id, &2025, &0, &false, &zero(env));
     assert_eq!(result, Err(Ok(Error::NonPositiveAmount)));
 }
 
 #[test]
 fn retire_negative_amount_fails() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
-    let result = client.try_retire(&from, &project_id, &2025, &-100, &false);
+    let result = client.try_retire(&from, &project_id, &2025, &-100, &false, &zero(env));
     assert_eq!(result, Err(Ok(Error::NonPositiveAmount)));
 }
 
 #[test]
-fn retire_shield_true_fails_with_not_yet_implemented() {
+fn retire_shielded_stores_nullifier_only() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+    let registry_client = RegistryContractClient::new(&stack.env, &stack.registry_id);
+    let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
+
+    let nullifier = nullifier(env);
+    let record = client.retire(&from, &project_id, &2025, &100, &true, &nullifier);
+
+    // The record and event carry the nullifier, never the caller.
+    assert_eq!(record.retiree, RetireeRef::Shielded(nullifier.clone()));
+
+    // Credits were still burned and the vintage total updated.
+    assert_eq!(token_client.balance(&from), 900);
+    assert_eq!(
+        registry_client
+            .get_vintage(&project_id, &2025)
+            .total_retired,
+        100
+    );
+}
+
+#[test]
+fn retire_shielded_replay_rejected() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+    let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
+
+    let nullifier = nullifier(env);
+    client.retire(&from, &project_id, &2025, &100, &true, &nullifier);
+
+    // The same shielded claim cannot be replayed.
+    let result = client.try_retire(&from, &project_id, &2025, &100, &true, &nullifier);
+    assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
+
+    // No additional credits were burned.
+    assert_eq!(token_client.balance(&from), 900);
+}
+
+#[test]
+fn retire_shielded_empty_nullifier_fails() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+    let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
+
+    let result = client.try_retire(&from, &project_id, &2025, &100, &true, &zero(env));
+    assert_eq!(result, Err(Ok(Error::InvalidNullifier)));
+
+    // Nothing burned.
+    assert_eq!(token_client.balance(&from), 1000);
+}
+
+#[test]
+fn retire_shielded_ignores_nullifier_when_public() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
     let project_id = sample_project_id(&stack.env);
     let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
 
-    let result = client.try_retire(&from, &project_id, &2025, &100, &true);
-    assert_eq!(result, Err(Ok(Error::NotYetImplemented)));
+    // Public retirement records the caller even when a nullifier is passed.
+    let record = client.retire(&from, &project_id, &2025, &100, &false, &nullifier(env));
+    assert_eq!(record.retiree, RetireeRef::Public(from.clone()));
 }
 
 #[test]
 fn retire_multiple_projects() {
     let stack = setup();
+    let env = &stack.env;
     let from = Address::generate(&stack.env);
     fund(&stack, &from, 1000);
-    let env = &stack.env;
     let client = RetirementContractClient::new(env, &stack.retirement_id);
     let registry_client = RegistryContractClient::new(env, &stack.registry_id);
     let token_client = CreditTokenContractClient::new(env, &stack.credit_token_id);
@@ -263,8 +348,8 @@ fn retire_multiple_projects() {
     registry_client.request_mint(&project2, &2025, &1000, &sample_proof(env));
     token_client.transfer(&stack.registry_id, &from, &500);
 
-    let record1 = client.retire(&from, &project1, &2025, &100, &false);
-    let record2 = client.retire(&from, &project2, &2025, &200, &false);
+    let record1 = client.retire(&from, &project1, &2025, &100, &false, &zero(env));
+    let record2 = client.retire(&from, &project2, &2025, &200, &false, &zero(env));
 
     assert_ne!(record1.id, record2.id);
     assert_eq!(record1.amount, 100);
@@ -286,8 +371,8 @@ fn retire_same_project_different_vintages() {
     registry_client.request_mint(&project_id, &2024, &1000, &sample_proof(env));
     token_client.transfer(&stack.registry_id, &from, &1000);
 
-    let record1 = client.retire(&from, &project_id, &2024, &100, &false);
-    let record2 = client.retire(&from, &project_id, &2025, &200, &false);
+    let record1 = client.retire(&from, &project_id, &2024, &100, &false, &zero(env));
+    let record2 = client.retire(&from, &project_id, &2025, &200, &false, &zero(env));
 
     assert_ne!(record1.id, record2.id);
     assert_eq!(record1.vintage_year, 2024);

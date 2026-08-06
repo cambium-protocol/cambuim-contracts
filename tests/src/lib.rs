@@ -148,7 +148,14 @@ fn full_lifecycle_register_mint_swap_retire() {
 
     // --- Step 5: Retire credits ---
     let retire_amount = 200;
-    let record = retirement_client.retire(&user, &project_id, &2025, &retire_amount, &false);
+    let record = retirement_client.retire(
+        &user,
+        &project_id,
+        &2025,
+        &retire_amount,
+        &false,
+        &BytesN::from_array(&env, &[0u8; 32]),
+    );
 
     assert_eq!(record.project_id, project_id);
     assert_eq!(record.vintage_year, 2025);
@@ -159,19 +166,19 @@ fn full_lifecycle_register_mint_swap_retire() {
     let fetched_record = retirement_client.get_retirement(&record.id);
     assert_eq!(fetched_record, record);
 
-    // --- Step 6: Verify shield=true fails loudly ---
-    let shield_result = retirement_client.try_retire(&user, &project_id, &2025, &100, &true);
-    assert_eq!(
-        shield_result,
-        Err(Ok(cambium_shared::Error::NotYetImplemented))
-    );
+    // --- Step 6: Verify shield=true records only the nullifier ---
+    let nullifier = BytesN::from_array(&env, &[42u8; 32]);
+    let shielded = retirement_client.retire(&user, &project_id, &2025, &100, &true, &nullifier);
+    assert_eq!(shielded.retiree, RetireeRef::Shielded(nullifier.clone()));
+    // The shielded retirement also consumed credits.
+    assert_eq!(token_client.balance(&user), 200);
 
     // --- Step 7: Verify vintage totals ---
     let vintage = registry_client.get_vintage(&project_id, &2025);
     assert_eq!(vintage.total_issued, 1000);
     // The retirement contract records retirements against the vintage, so
     // cumulative retired supply is tracked and double-counting is prevented.
-    assert_eq!(vintage.total_retired, retire_amount);
+    assert_eq!(vintage.total_retired, retire_amount + 100);
 }
 
 /// Test that the verifier is called and mock returns true.

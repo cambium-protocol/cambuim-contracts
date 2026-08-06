@@ -71,4 +71,6 @@ pub enum Error {
     ThresholdNotMet = 14,
     /// A configuration value is invalid (e.g. governance threshold/signers).
     InvalidConfig = 15,
+    /// A shielded retirement was requested with an empty/invalid nullifier.
+    InvalidNullifier = 16,
 }
