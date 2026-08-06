@@ -103,6 +103,31 @@ impl RetirementContract {
             return Err(Error::InsufficientBalance);
         }
 
+        // Record the retirement against the project's vintage so cumulative
+        // retired supply is tracked and double-counting is prevented. The
+        // registry only accepts this call from this contract.
+        let registry: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Registry)
+            .expect("not initialized");
+        let record_result: Result<Result<Result<(), cambium_shared::Error>, _>, _> =
+            env.try_invoke_contract::<Result<(), cambium_shared::Error>, soroban_sdk::Error>(
+                &registry,
+                &Symbol::new(&env, "record_retirement"),
+                soroban_sdk::vec![
+                    &env,
+                    project_id.into_val(&env),
+                    vintage_year.into_val(&env),
+                    amount.into_val(&env),
+                ],
+            );
+        match record_result {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => return Err(e),
+            _ => return Err(Error::RetirementNotFound),
+        }
+
         // Generate a unique retirement record ID
         let mut id_bytes = soroban_sdk::Bytes::new(&env);
         id_bytes.extend_from_slice(&project_id.to_array());

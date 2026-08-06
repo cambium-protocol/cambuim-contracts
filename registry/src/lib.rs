@@ -149,6 +149,85 @@ impl RegistryContract {
         Ok(())
     }
 
+    /// Register the retirement contract as the sole recorder of retirements.
+    ///
+    /// # Authorization
+    /// `signer` must be a member of the governance signer set.
+    pub fn set_retirement_contract(
+        env: Env,
+        signer: Address,
+        retirement: Address,
+    ) -> Result<(), Error> {
+        signer.require_auth();
+        let cfg = governance::config(&env)?;
+        if !governance::is_signer(&cfg, &signer) {
+            return Err(Error::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RetirementContract, &retirement);
+        Ok(())
+    }
+
+    /// Record a retirement against a vintage's cumulative totals.
+    ///
+    /// Called by the retirement contract after credits have been burned. The
+    /// retirement contract is authorized via its stored address (the calling
+    /// contract authorizes itself for its own address on cross-contract calls).
+    ///
+    /// # Errors
+    /// * `NonPositiveAmount` if `amount` <= 0
+    /// * `NotFound` if the vintage has no issuance record
+    /// * `ExceedsIssued` if the retirement would push `total_retired` beyond
+    ///   `total_issued` (double-counting guard)
+    /// * `Overflow` if the cumulative total would overflow
+    pub fn record_retirement(
+        env: Env,
+        project_id: BytesN<32>,
+        vintage_year: u32,
+        amount: i128,
+    ) -> Result<(), Error> {
+        if amount <= 0 {
+            return Err(Error::NonPositiveAmount);
+        }
+
+        let retirement: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RetirementContract)
+            .ok_or(Error::NotFound)?;
+        retirement.require_auth();
+
+        let vintage_key = DataKey::Vintage(project_id.clone(), vintage_year);
+        let mut vintage: Vintage = env
+            .storage()
+            .persistent()
+            .get(&vintage_key)
+            .ok_or(Error::NotFound)?;
+
+        let new_retired = vintage
+            .total_retired
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        if new_retired > vintage.total_issued {
+            return Err(Error::ExceedsIssued);
+        }
+        vintage.total_retired = new_retired;
+
+        env.storage().persistent().set(&vintage_key, &vintage);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "retirement_recorded"),
+                project_id,
+                vintage_year,
+            ),
+            (amount,),
+        );
+
+        Ok(())
+    }
+
     /// Bootstrap the multi-sig governance configuration.
     ///
     /// Can only be called once, before any governance exists. The deployer is

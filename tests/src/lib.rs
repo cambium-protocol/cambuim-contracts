@@ -52,6 +52,12 @@ fn deploy_all() -> (
     // Wire registry: credit-token and zk-verifier
     registry_client.initialize(&credit_token_id, &zk_verifier_id);
 
+    // Bootstrap governance and register the retirement contract so retirements
+    // are recorded against vintage totals.
+    let signer = soroban_sdk::Address::generate(&env);
+    registry_client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    registry_client.set_retirement_contract(&signer, &retirement_id);
+
     // Authorize the retirement contract to burn credits.
     token_client.set_burner(&retirement_id);
 
@@ -163,11 +169,9 @@ fn full_lifecycle_register_mint_swap_retire() {
     // --- Step 7: Verify vintage totals ---
     let vintage = registry_client.get_vintage(&project_id, &2025);
     assert_eq!(vintage.total_issued, 1000);
-    // Note: vintage.total_retired is not updated by retirement contract
-    // in this implementation (retirement contract is separate).
-    // This is expected per the architecture — retirement records are in
-    // the retirement contract, vintage totals in registry.
-    assert_eq!(vintage.total_retired, 0);
+    // The retirement contract records retirements against the vintage, so
+    // cumulative retired supply is tracked and double-counting is prevented.
+    assert_eq!(vintage.total_retired, retire_amount);
 }
 
 /// Test that the verifier is called and mock returns true.

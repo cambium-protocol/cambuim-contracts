@@ -476,3 +476,78 @@ fn approve_missing_proposal_fails() {
     let result = client.try_approve_vkey_update(&s1, &missing);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
+
+// ---- retirement recording tests ----
+
+#[test]
+fn set_retirement_contract_requires_signer() {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+    let signer = Address::generate(&env);
+    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    let outsider = Address::generate(&env);
+    let retirement = Address::generate(&env);
+    let result = client.try_set_retirement_contract(&outsider, &retirement);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn record_retirement_updates_vintage() {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+    let signer = Address::generate(&env);
+    let retirement = Address::generate(&env);
+    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    client.set_retirement_contract(&signer, &retirement);
+
+    // Register project + mint 1000 so a vintage exists.
+    let project = make_project(&env, 1);
+    let project_id = project.id.clone();
+    client.register_project(&project);
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+
+    // With mock auths, the registered retirement contract is authorized.
+    client.record_retirement(&project_id, &2025, &400);
+    let vintage = client.get_vintage(&project_id, &2025);
+    assert_eq!(vintage.total_issued, 1000);
+    assert_eq!(vintage.total_retired, 400);
+
+    // Retiring more than issued is rejected (double-counting guard).
+    let result = client.try_record_retirement(&project_id, &2025, &700);
+    assert_eq!(result, Err(Ok(Error::ExceedsIssued)));
+    assert_eq!(client.get_vintage(&project_id, &2025).total_retired, 400);
+}
+
+#[test]
+fn record_retirement_requires_authorized_contract() {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+    let signer = Address::generate(&env);
+    let retirement = Address::generate(&env);
+    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    client.set_retirement_contract(&signer, &retirement);
+
+    let project = make_project(&env, 1);
+    let project_id = project.id.clone();
+    client.register_project(&project);
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+
+    // Remove all mocked auths: recording without the retirement contract's
+    // authorization must fail, since the caller is not the registered contract.
+    env.set_auths(&[]);
+    let result = client.try_record_retirement(&project_id, &2025, &100);
+    assert!(
+        result.is_err(),
+        "record_retirement must require the retirement contract"
+    );
+}
+
+#[test]
+fn record_retirement_unknown_vintage_fails() {
+    let (env, _registry_addr, client, _credit_token_id) = setup();
+    let signer = Address::generate(&env);
+    let retirement = Address::generate(&env);
+    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    client.set_retirement_contract(&signer, &retirement);
+
+    let unknown = BytesN::from_array(&env, &[99u8; 32]);
+    let result = client.try_record_retirement(&unknown, &2025, &100);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}

@@ -153,7 +153,9 @@ name = "cambium-retirement"
 version = "0.1.0"
 dependencies = [
  "cambium-credit-token",
+ "cambium-registry",
  "cambium-shared",
+ "cambium-zk-verifier",
  "soroban-sdk",
 ]
 
