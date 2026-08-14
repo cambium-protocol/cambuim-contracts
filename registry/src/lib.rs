@@ -9,7 +9,7 @@ mod tests;
 use cambium_shared::{Error, Proof};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, IntoVal, Symbol, Vec};
 
-pub use types::{DataKey, GovernanceConfig, Project, Vintage, VkeyProposal, VkeyState};
+pub use types::{DataKey, GovernanceConfig, Project, Proposal, ProposalTarget, Vintage, VkeyState};
 
 #[contract]
 pub struct RegistryContract;
@@ -307,18 +307,18 @@ impl RegistryContract {
             })
     }
 
-    /// Propose a verifying-key update for `methodology`.
+    /// Propose a protocol update governed by multi-sig approval and a
+    /// timelock.
     ///
     /// # Authorization
     /// `signer` must be a member of the governance signer set.
     ///
     /// # Returns
     /// The id of the newly created proposal.
-    pub fn propose_vkey_update(
+    pub fn propose_update(
         env: Env,
         signer: Address,
-        methodology: Symbol,
-        new_key: BytesN<32>,
+        target: ProposalTarget,
     ) -> Result<BytesN<32>, Error> {
         signer.require_auth();
         let cfg = governance::config(&env)?;
@@ -326,14 +326,14 @@ impl RegistryContract {
             return Err(Error::Unauthorized);
         }
 
-        let proposal = VkeyProposal {
+        let proposal = Proposal {
             id: BytesN::from_array(&env, &[0u8; 32]), // filled below
-            methodology,
-            new_key,
+            target,
             proposed_at: env.ledger().timestamp(),
             // Proposing implies approval: the proposer's vote counts.
             approvals: soroban_sdk::vec![&env, signer],
             executed: false,
+            cancelled: false,
         };
 
         let id = governance::proposal_id(&env, &proposal);
@@ -342,11 +342,31 @@ impl RegistryContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::VkeyProposal(id.clone()), &stored);
+            .set(&DataKey::Proposal(id.clone()), &stored);
         Ok(id)
     }
 
-    /// Approve a pending verifying-key update.
+    /// Convenience wrapper proposing a verifying-key update for `methodology`.
+    pub fn propose_vkey_update(
+        env: Env,
+        signer: Address,
+        methodology: Symbol,
+        new_key: BytesN<32>,
+    ) -> Result<BytesN<32>, Error> {
+        Self::propose_update(env, signer, ProposalTarget::Vkey(methodology, new_key))
+    }
+
+    /// Propose replacing the governance configuration (signer set, threshold,
+    /// timelock). Enables signer rotation through the same approval flow.
+    pub fn propose_governance_update(
+        env: Env,
+        signer: Address,
+        config: GovernanceConfig,
+    ) -> Result<BytesN<32>, Error> {
+        Self::propose_update(env, signer, ProposalTarget::Governance(config))
+    }
+
+    /// Approve a pending governance proposal.
     ///
     /// # Authorization
     /// `signer` must be a member of the governance signer set and must not
@@ -354,7 +374,7 @@ impl RegistryContract {
     ///
     /// # Returns
     /// The total number of approvals recorded for the proposal.
-    pub fn approve_vkey_update(
+    pub fn approve_update(
         env: Env,
         signer: Address,
         proposal_id: BytesN<32>,
@@ -365,14 +385,14 @@ impl RegistryContract {
             return Err(Error::Unauthorized);
         }
 
-        let key = DataKey::VkeyProposal(proposal_id.clone());
-        let mut proposal: VkeyProposal = env
+        let key = DataKey::Proposal(proposal_id.clone());
+        let mut proposal: Proposal = env
             .storage()
             .persistent()
             .get(&key)
             .ok_or(Error::NotFound)?;
 
-        if proposal.executed {
+        if proposal.executed || proposal.cancelled {
             return Err(Error::OrderClosed);
         }
         if proposal.approvals.contains(&signer) {
@@ -385,6 +405,41 @@ impl RegistryContract {
         Ok(approvals)
     }
 
+    /// Return a stored proposal, or `Error::NotFound`.
+    pub fn get_proposal(env: Env, proposal_id: BytesN<32>) -> Result<Proposal, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::NotFound)
+    }
+
+    /// Cancel a pending proposal before it executes.
+    ///
+    /// # Authorization
+    /// Any governance signer may cancel a proposal that has not yet executed.
+    pub fn cancel_update(env: Env, signer: Address, proposal_id: BytesN<32>) -> Result<(), Error> {
+        signer.require_auth();
+        let cfg = governance::config(&env)?;
+        if !governance::is_signer(&cfg, &signer) {
+            return Err(Error::Unauthorized);
+        }
+
+        let key = DataKey::Proposal(proposal_id.clone());
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
+
+        if proposal.executed || proposal.cancelled {
+            return Err(Error::OrderClosed);
+        }
+
+        proposal.cancelled = true;
+        env.storage().persistent().set(&key, &proposal);
+        Ok(())
+    }
+
     /// Execute a fully-approved, timelock-elapsed verifying-key update.
     ///
     /// Callable by anyone once the approval threshold has been reached and
@@ -395,14 +450,18 @@ impl RegistryContract {
     pub fn execute_vkey_update(env: Env, proposal_id: BytesN<32>) -> Result<VkeyState, Error> {
         let cfg = governance::config(&env)?;
 
-        let key = DataKey::VkeyProposal(proposal_id.clone());
-        let mut applied: VkeyProposal = env
+        let key = DataKey::Proposal(proposal_id.clone());
+        let mut applied: Proposal = env
             .storage()
             .persistent()
             .get(&key)
             .ok_or(Error::NotFound)?;
 
-        if applied.executed {
+        let ProposalTarget::Vkey(methodology, new_key) = applied.target.clone() else {
+            return Err(Error::InvalidProposalTarget);
+        };
+
+        if applied.executed || applied.cancelled {
             return Err(Error::OrderClosed);
         }
         if applied.approvals.len() < cfg.threshold {
@@ -416,7 +475,7 @@ impl RegistryContract {
 
         // Compute the new key state first so a failure can't leave the
         // proposal marked executed without the key being applied.
-        let vkey_key = DataKey::Vkey(applied.methodology.clone());
+        let vkey_key = DataKey::Vkey(methodology.clone());
         let mut vkey: VkeyState = env
             .storage()
             .persistent()
@@ -426,7 +485,7 @@ impl RegistryContract {
                 key: BytesN::from_array(&env, &[0u8; 32]),
             });
         vkey.version = vkey.version.checked_add(1).ok_or(Error::Overflow)?;
-        vkey.key = applied.new_key.clone();
+        vkey.key = new_key.clone();
 
         // Mark executed before applying to avoid re-entrant double execution.
         applied.executed = true;
@@ -435,10 +494,62 @@ impl RegistryContract {
 
         // Emit the governance event for indexers.
         env.events().publish(
-            (Symbol::new(&env, "vkey_updated"), applied.methodology),
+            (Symbol::new(&env, "vkey_updated"), methodology),
             (vkey.version,),
         );
 
         Ok(vkey)
+    }
+
+    /// Execute a fully-approved, timelock-elapsed governance-config update
+    /// (signer rotation).
+    ///
+    /// Callable by anyone once the approval threshold has been reached and
+    /// the timelock has elapsed — execution is intentionally permissionless.
+    pub fn execute_governance_update(env: Env, proposal_id: BytesN<32>) -> Result<(), Error> {
+        let cfg = governance::config(&env)?;
+
+        let key = DataKey::Proposal(proposal_id.clone());
+        let mut applied: Proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
+
+        let ProposalTarget::Governance(config) = applied.target.clone() else {
+            return Err(Error::InvalidProposalTarget);
+        };
+
+        if applied.executed || applied.cancelled {
+            return Err(Error::OrderClosed);
+        }
+        if applied.approvals.len() < cfg.threshold {
+            return Err(Error::ThresholdNotMet);
+        }
+
+        let elapsed = env.ledger().timestamp().saturating_sub(applied.proposed_at);
+        if elapsed < cfg.timelock_secs {
+            return Err(Error::TimelockPending);
+        }
+
+        // The replacement config must itself be valid before it is stored.
+        if config.signers.is_empty()
+            || config.threshold == 0
+            || config.threshold > config.signers.len()
+            || config.timelock_secs == 0
+        {
+            return Err(Error::InvalidConfig);
+        }
+
+        applied.executed = true;
+        env.storage().persistent().set(&key, &applied);
+        env.storage()
+            .instance()
+            .set(&DataKey::GovernanceConfig, &config);
+
+        env.events()
+            .publish((Symbol::new(&env, "governance_updated"),), ());
+
+        Ok(())
     }
 }

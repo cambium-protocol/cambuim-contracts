@@ -1,19 +1,22 @@
-//! Multi-sig + timelock governance for verifying-key updates.
+//! Multi-sig + timelock governance for protocol updates.
 //!
-//! `update_verifying_key` is the highest-value attack surface in the system:
+//! Verifying-key updates are the highest-value attack surface in the system:
 //! a malicious key update could allow forged proofs to mint uncapped credits.
-//! Updates therefore require `threshold` signer approvals followed by a
-//! timelock delay before the new key becomes active.
+//! Governance therefore requires `threshold` signer approvals followed by a
+//! timelock delay before a change takes effect. The same flow also covers
+//! updates to the governance configuration itself (signer rotation), so no
+//! single signer set can become permanently self-appointed.
 //!
 //! The contract entry points live in `lib.rs` (`init_governance`,
-//! `propose_vkey_update`, `approve_vkey_update`, `execute_vkey_update`); this
-//! module contains the shared helpers they use.
+//! `propose_update`, `approve_update`, `execute_vkey_update`,
+//! `execute_governance_update`, `cancel_update`); this module contains the
+//! shared helpers they use.
 
 use cambium_shared::Error;
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{Address, BytesN, Env};
 
-use crate::{DataKey, GovernanceConfig, VkeyProposal};
+use crate::{DataKey, GovernanceConfig, Proposal};
 
 /// Load the governance configuration, or `Error::NotFound` if uninitialized.
 pub(crate) fn config(env: &Env) -> Result<GovernanceConfig, Error> {
@@ -29,6 +32,6 @@ pub(crate) fn is_signer(config: &GovernanceConfig, addr: &Address) -> bool {
 }
 
 /// Compute the deterministic id of a proposal from its contents.
-pub(crate) fn proposal_id(env: &Env, proposal: &VkeyProposal) -> BytesN<32> {
+pub(crate) fn proposal_id(env: &Env, proposal: &Proposal) -> BytesN<32> {
     env.crypto().keccak256(&proposal.clone().to_xdr(env)).into()
 }

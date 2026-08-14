@@ -58,23 +58,39 @@ pub struct VkeyState {
     pub key: BytesN<32>,
 }
 
-/// A pending verifying-key update proposal, subject to multi-sig approval
-/// and a timelock before execution.
+/// What a governance proposal changes when executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
-pub struct VkeyProposal {
+pub enum ProposalTarget {
+    /// Rotate the canonical verifying key for a methodology.
+    /// Arguments: (methodology, replacement verifying key).
+    Vkey(Symbol, BytesN<32>),
+    /// Replace the governance configuration (signer set / threshold /
+    /// timelock). Argument: the proposed replacement configuration.
+    Governance(GovernanceConfig),
+}
+
+/// A pending governance proposal, subject to multi-sig approval and a
+/// timelock before execution.
+///
+/// Replaces the former `VkeyProposal` (verifying-key updates only) with a
+/// general proposal that can also change the governance configuration itself,
+/// enabling signer rotation through the same approval flow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct Proposal {
     /// Unique proposal identifier.
     pub id: BytesN<32>,
-    /// Methodology the update applies to.
-    pub methodology: Symbol,
-    /// Proposed replacement verifying key.
-    pub new_key: BytesN<32>,
+    /// The change being proposed.
+    pub target: ProposalTarget,
     /// Ledger timestamp when the proposal was created.
     pub proposed_at: u64,
     /// Signers who have approved so far.
     pub approvals: Vec<Address>,
-    /// Whether the proposal has been executed or cancelled.
+    /// Whether the proposal has been executed.
     pub executed: bool,
+    /// Whether a signer cancelled the proposal before execution.
+    pub cancelled: bool,
 }
 
 /// Storage keys used by the registry contract.
@@ -91,8 +107,8 @@ pub enum DataKey {
     Vintage(BytesN<32>, u32),
     /// Multi-sig governance configuration.
     GovernanceConfig,
-    /// A pending verifying-key update proposal, keyed by proposal id.
-    VkeyProposal(BytesN<32>),
+    /// A pending governance proposal, keyed by proposal id.
+    Proposal(BytesN<32>),
     /// Canonical verifying key state per methodology.
     Vkey(Symbol),
     /// The contract authorized to record retirements.

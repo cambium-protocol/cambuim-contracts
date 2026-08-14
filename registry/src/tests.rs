@@ -5,7 +5,9 @@ use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol,
 };
 
-use super::{Project, RegistryContract, RegistryContractClient, Vintage};
+use super::{
+    GovernanceConfig, Project, ProposalTarget, RegistryContract, RegistryContractClient, Vintage,
+};
 use cambium_shared::Error;
 /// Register both the registry and credit-token contracts and wire them together.
 /// Returns (env, registry_contract_address, registry_client, credit_token_contract_address).
@@ -464,7 +466,7 @@ fn full_governance_flow_updates_vkey() {
     );
 
     // Approve with signer 2 -> threshold (2) reached
-    let approvals = client.approve_vkey_update(&s2, &proposal_id);
+    let approvals = client.approve_update(&s2, &proposal_id);
     assert_eq!(approvals, 2);
 
     // Timelock not elapsed -> cannot execute
@@ -502,7 +504,7 @@ fn governance_requires_threshold_not_all_signers() {
     let proposal_id = client.propose_vkey_update(&s1, &methodology, &new_key);
 
     // Proposing counts as signer 1's approval; a second vote is rejected.
-    let result = client.try_approve_vkey_update(&s1, &proposal_id);
+    let result = client.try_approve_update(&s1, &proposal_id);
     assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
 
     // Only one approval exists, so the threshold (2) is never reached —
@@ -526,7 +528,7 @@ fn approve_requires_signer() {
     );
 
     let outsider = Address::generate(&env);
-    let result = client.try_approve_vkey_update(&outsider, &proposal_id);
+    let result = client.try_approve_update(&outsider, &proposal_id);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -535,8 +537,193 @@ fn approve_missing_proposal_fails() {
     let (env, client, signers) = governance_setup();
     let s1 = signers.get(0).unwrap();
     let missing = BytesN::from_array(&env, &[99u8; 32]);
-    let result = client.try_approve_vkey_update(&s1, &missing);
+    let result = client.try_approve_update(&s1, &missing);
     assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+
+// ---- governance-config updates (signer rotation) ----
+
+#[test]
+fn governance_update_rotates_signer_set() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let s2 = signers.get(1).unwrap();
+
+    // Replace the signer set with a fresh set of two signers, threshold 2.
+    let new_signer1 = Address::generate(&env);
+    let new_signer2 = Address::generate(&env);
+    let new_config = GovernanceConfig {
+        threshold: 2,
+        signers: soroban_sdk::vec![&env, new_signer1.clone(), new_signer2.clone()],
+        timelock_secs: 7200,
+    };
+
+    let proposal_id = client.propose_governance_update(&s1, &new_config);
+    assert_ne!(proposal_id, BytesN::from_array(&env, &[0u8; 32]));
+
+    // Old signer set still governs approval of the rotation.
+    let approvals = client.approve_update(&s2, &proposal_id);
+    assert_eq!(approvals, 2);
+
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    client.execute_governance_update(&proposal_id);
+
+    let config = client.get_governance();
+    assert_eq!(config.threshold, 2);
+    assert_eq!(config.signers.len(), 2);
+    assert_eq!(config.signers.get(0).unwrap(), new_signer1);
+    assert_eq!(config.signers.get(1).unwrap(), new_signer2);
+    assert_eq!(config.timelock_secs, 7200);
+
+    // The old signer is no longer authorized.
+    let result = client.try_propose_governance_update(&s1, &new_config);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn execute_governance_update_rejects_vkey_proposal() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let s2 = signers.get(1).unwrap();
+
+    // A vkey proposal cannot be executed through the governance path...
+    let proposal_id = client.propose_vkey_update(
+        &s1,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[7u8; 32]),
+    );
+    client.approve_update(&s2, &proposal_id);
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    assert_eq!(
+        client.try_execute_governance_update(&proposal_id),
+        Err(Ok(Error::InvalidProposalTarget))
+    );
+
+    // ...and a governance proposal cannot be executed as a vkey update.
+    let new_config = GovernanceConfig {
+        threshold: 2,
+        signers: soroban_sdk::vec![&env, s1.clone(), s2.clone()],
+        timelock_secs: 7200,
+    };
+    let gov_proposal = client.propose_governance_update(&s1, &new_config);
+    client.approve_update(&s2, &gov_proposal);
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    assert_eq!(
+        client.try_execute_vkey_update(&gov_proposal),
+        Err(Ok(Error::InvalidProposalTarget))
+    );
+}
+
+#[test]
+fn execute_governance_update_rejects_invalid_config() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let s2 = signers.get(1).unwrap();
+
+    // Threshold 0 is invalid; execution must be rejected without applying.
+    let bad_config = GovernanceConfig {
+        threshold: 0,
+        signers: soroban_sdk::vec![&env, s1.clone()],
+        timelock_secs: 3600,
+    };
+    let proposal_id = client.propose_governance_update(&s1, &bad_config);
+    client.approve_update(&s2, &proposal_id);
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    assert_eq!(
+        client.try_execute_governance_update(&proposal_id),
+        Err(Ok(Error::InvalidConfig))
+    );
+
+    // The current configuration is untouched.
+    let config = client.get_governance();
+    assert_eq!(config.signers.len(), 3);
+    assert_eq!(config.threshold, 2);
+}
+
+// ---- proposal cancellation ----
+
+#[test]
+fn cancel_update_prevents_execution() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let s2 = signers.get(1).unwrap();
+
+    let proposal_id = client.propose_vkey_update(
+        &s1,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[7u8; 32]),
+    );
+    client.approve_update(&s2, &proposal_id);
+
+    // A signer cancels the proposal before the timelock elapses.
+    client.cancel_update(&s2, &proposal_id);
+
+    // Even after the timelock, the cancelled proposal cannot execute.
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    assert_eq!(
+        client.try_execute_vkey_update(&proposal_id),
+        Err(Ok(Error::OrderClosed))
+    );
+    // And the canonical key was never changed.
+    assert_eq!(client.get_vkey(&Symbol::new(&env, "VM0007")).version, 0);
+
+    // Cancelling again is rejected.
+    assert_eq!(
+        client.try_cancel_update(&s1, &proposal_id),
+        Err(Ok(Error::OrderClosed))
+    );
+}
+
+#[test]
+fn cancel_update_requires_signer() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let proposal_id = client.propose_vkey_update(
+        &s1,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[7u8; 32]),
+    );
+
+    let outsider = Address::generate(&env);
+    let result = client.try_cancel_update(&outsider, &proposal_id);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn cancel_missing_proposal_fails() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let missing = BytesN::from_array(&env, &[99u8; 32]);
+    let result = client.try_cancel_update(&s1, &missing);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn get_proposal_returns_stored_proposal() {
+    let (env, client, signers) = governance_setup();
+    let s1 = signers.get(0).unwrap();
+    let new_key = BytesN::from_array(&env, &[7u8; 32]);
+    let methodology = Symbol::new(&env, "VM0007");
+
+    let proposal_id = client.propose_vkey_update(&s1, &methodology, &new_key);
+    let proposal = client.get_proposal(&proposal_id);
+    assert_eq!(proposal.id, proposal_id);
+    assert_eq!(proposal.approvals.len(), 1);
+    assert!(!proposal.executed);
+    assert!(!proposal.cancelled);
+    assert_eq!(
+        proposal.target,
+        ProposalTarget::Vkey(methodology.clone(), new_key.clone())
+    );
+
+    // Missing proposal -> NotFound.
+    let missing = BytesN::from_array(&env, &[99u8; 32]);
+    assert_eq!(client.try_get_proposal(&missing), Err(Ok(Error::NotFound)));
 }
 
 // ---- retirement recording tests ----
