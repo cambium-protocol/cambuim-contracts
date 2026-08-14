@@ -50,6 +50,90 @@ fn balance_defaults_to_zero() {
     assert_eq!(client(&env, &contract_id).balance(&user), 0);
 }
 
+// ---- SEP-41 metadata tests ----
+
+#[test]
+fn initialize_seeds_default_metadata() {
+    let (env, _admin, _user, contract_id) = setup();
+    let c = client(&env, &contract_id);
+    assert_eq!(c.decimals(), 7);
+    assert_eq!(
+        c.name(),
+        soroban_sdk::String::from_str(&env, "Cambium Carbon Credit")
+    );
+    assert_eq!(c.symbol(), soroban_sdk::String::from_str(&env, "CAMB"));
+    assert_eq!(c.total_supply(), 0);
+}
+
+#[test]
+fn set_metadata_overrides_defaults() {
+    let (env, _admin, _user, contract_id) = setup();
+    let c = client(&env, &contract_id);
+    c.set_metadata(
+        &6,
+        &soroban_sdk::String::from_str(&env, "Cambium Verified"),
+        &soroban_sdk::String::from_str(&env, "CVC"),
+    );
+    assert_eq!(c.decimals(), 6);
+    assert_eq!(
+        c.name(),
+        soroban_sdk::String::from_str(&env, "Cambium Verified")
+    );
+    assert_eq!(c.symbol(), soroban_sdk::String::from_str(&env, "CVC"));
+}
+
+#[test]
+fn set_metadata_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, CreditTokenContract);
+    let c = CreditTokenContractClient::new(&env, &contract_id);
+    env.mock_all_auths();
+    c.initialize(&admin);
+
+    env.set_auths(&[]);
+    let result = c.try_set_metadata(
+        &6,
+        &soroban_sdk::String::from_str(&env, "x"),
+        &soroban_sdk::String::from_str(&env, "y"),
+    );
+    assert!(result.is_err(), "set_metadata must fail without admin auth");
+}
+
+#[test]
+fn set_metadata_rejects_empty_name_or_symbol() {
+    let (env, _admin, _user, contract_id) = setup();
+    let c = client(&env, &contract_id);
+    let empty = soroban_sdk::String::from_str(&env, "");
+    assert_eq!(
+        c.try_set_metadata(&7, &empty, &soroban_sdk::String::from_str(&env, "CAMB")),
+        Err(Ok(TokenError::Unauthorized))
+    );
+    assert_eq!(
+        c.try_set_metadata(&7, &soroban_sdk::String::from_str(&env, "name"), &empty),
+        Err(Ok(TokenError::Unauthorized))
+    );
+}
+
+// ---- total supply tests ----
+
+#[test]
+fn total_supply_tracks_mint_and_burn() {
+    let (env, _admin, user, contract_id) = setup();
+    let c = client(&env, &contract_id);
+
+    c.mint(&user, &1000);
+    c.mint(&user, &500);
+    assert_eq!(c.total_supply(), 1500);
+
+    c.transfer(&user, &Address::generate(&env), &300);
+    assert_eq!(c.total_supply(), 1500, "transfers must not change supply");
+
+    c.burn(&user, &400);
+    assert_eq!(c.total_supply(), 1100);
+    assert_eq!(c.balance(&user), 800);
+}
+
 // ---- mint authorization tests (100% coverage on auth paths) ----
 
 #[test]

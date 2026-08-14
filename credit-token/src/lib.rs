@@ -3,7 +3,9 @@
 #[cfg(any(test, feature = "testutils"))]
 extern crate std;
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol,
+};
 
 #[derive(Clone)]
 #[contracttype]
@@ -18,7 +20,21 @@ pub enum DataKey {
     AllowlistEnabled,
     /// Addresses permitted to hold and transact while the allowlist is on.
     Allowlisted(Address),
+    /// Number of decimal places used by the token (SEP-41 metadata).
+    Decimals,
+    /// Human-readable token name (SEP-41 metadata).
+    Name,
+    /// Token ticker symbol (SEP-41 metadata).
+    Symbol,
+    /// Total number of tokens currently in circulation (minted minus burned).
+    TotalSupply,
 }
+
+/// Default SEP-41 metadata applied at initialization. Deployments that need
+/// different branding can override it via `set_metadata` (admin-only).
+const DEFAULT_DECIMALS: u32 = 7;
+const DEFAULT_NAME: &str = "Cambium Carbon Credit";
+const DEFAULT_SYMBOL: &str = "CAMB";
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,11 +54,25 @@ pub struct CreditTokenContract;
 impl CreditTokenContract {
     /// Initialize the token with an admin (registry contract address).
     /// Can only be called once.
+    ///
+    /// SEP-41 metadata is seeded with defaults (`decimals` = 7,
+    /// `name` = "Cambium Carbon Credit", `symbol` = "CAMB"); the admin may
+    /// override it later via `set_metadata`.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::Decimals, &DEFAULT_DECIMALS);
+        env.storage()
+            .instance()
+            .set(&DataKey::Name, &String::from_str(&env, DEFAULT_NAME));
+        env.storage()
+            .instance()
+            .set(&DataKey::Symbol, &String::from_str(&env, DEFAULT_SYMBOL));
+        env.storage().instance().set(&DataKey::TotalSupply, &0i128);
     }
 
     /// Return the admin (registry contract) address.
@@ -50,6 +80,65 @@ impl CreditTokenContract {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
+            .expect("not initialized")
+    }
+
+    /// Override the SEP-41 metadata. Can only be called after the allowlist
+    /// behaviour and once the token exists (i.e. it requires admin auth).
+    ///
+    /// # Authorization
+    /// Only callable by the admin address (the registry contract).
+    pub fn set_metadata(
+        env: Env,
+        decimals: u32,
+        name: String,
+        symbol: String,
+    ) -> Result<(), TokenError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        if name.is_empty() || symbol.is_empty() {
+            return Err(TokenError::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::Decimals, &decimals);
+        env.storage().instance().set(&DataKey::Name, &name);
+        env.storage().instance().set(&DataKey::Symbol, &symbol);
+        Ok(())
+    }
+
+    /// Return the number of decimals used for display (SEP-41 metadata).
+    pub fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Decimals)
+            .expect("not initialized")
+    }
+
+    /// Return the human-readable token name (SEP-41 metadata).
+    pub fn name(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&DataKey::Name)
+            .expect("not initialized")
+    }
+
+    /// Return the token ticker symbol (SEP-41 metadata).
+    pub fn symbol(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&DataKey::Symbol)
+            .expect("not initialized")
+    }
+
+    /// Return the total number of tokens in circulation (minted minus burned).
+    pub fn total_supply(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
             .expect("not initialized")
     }
 
@@ -195,6 +284,11 @@ impl CreditTokenContract {
             .checked_add(amount)
             .ok_or(TokenError::Overflow)?;
 
+        let supply = Self::total_supply(env.clone());
+        env.storage().instance().set(
+            &DataKey::TotalSupply,
+            &supply.checked_add(amount).ok_or(TokenError::Overflow)?,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_balance);
@@ -262,6 +356,11 @@ impl CreditTokenContract {
             return Err(TokenError::InsufficientBalance);
         }
 
+        let supply = Self::total_supply(env.clone());
+        env.storage().instance().set(
+            &DataKey::TotalSupply,
+            &supply.checked_sub(amount).ok_or(TokenError::Overflow)?,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
