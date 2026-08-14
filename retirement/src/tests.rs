@@ -3,7 +3,9 @@ use cambium_credit_token::{CreditTokenContract, CreditTokenContractClient};
 use cambium_registry::{Project, RegistryContract, RegistryContractClient};
 use cambium_shared::{Error, Proof};
 use cambium_zk_verifier::ZkVerifierContract;
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, Symbol};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Ledger as _, Address, Bytes, BytesN, Env, Symbol,
+};
 
 struct Stack {
     env: Env,
@@ -39,6 +41,17 @@ fn setup() -> Stack {
     let signer = Address::generate(&env);
     registry_client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
 
+    // Bootstrap a canonical verifying key (version 1) for the "VM0007"
+    // methodology so request_mint passes the canonical key binding.
+    let vkey_proposal = registry_client.propose_vkey_update(
+        &signer,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[5u8; 32]),
+    );
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    registry_client.execute_vkey_update(&vkey_proposal);
+
     // Deploy retirement and wire it as the burner + recorder.
     let retirement_id = env.register_contract(None, RetirementContract);
     let retirement_client = RetirementContractClient::new(&env, &retirement_id);
@@ -66,10 +79,10 @@ fn nullifier(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[42u8; 32])
 }
 
-fn sample_proof(env: &Env) -> Proof {
+fn sample_proof(env: &Env, project_id: &BytesN<32>) -> Proof {
     Proof {
         proof_data: Bytes::from_array(env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![env, BytesN::from_array(env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![env, project_id.clone()],
     }
 }
 
@@ -88,7 +101,7 @@ fn fund(stack: &Stack, from: &Address, amount: i128) {
         verifying_key_version: 1,
     };
     registry_client.register_project(&project);
-    registry_client.request_mint(&project_id, &2025, &amount, &sample_proof(env));
+    registry_client.request_mint(&project_id, &2025, &amount, &sample_proof(env, &project_id));
     token_client.transfer(&stack.registry_id, from, &amount);
 }
 
@@ -339,13 +352,13 @@ fn retire_multiple_projects() {
     // Register + fund a second project too.
     let project2_struct = Project {
         id: project2.clone(),
-        methodology: Symbol::new(env, "ARR"),
+        methodology: Symbol::new(env, "VM0007"),
         geography: Symbol::new(env, "KEN"),
         external_registry_ref: None,
         verifying_key_version: 1,
     };
     registry_client.register_project(&project2_struct);
-    registry_client.request_mint(&project2, &2025, &1000, &sample_proof(env));
+    registry_client.request_mint(&project2, &2025, &1000, &sample_proof(env, &project2));
     token_client.transfer(&stack.registry_id, &from, &500);
 
     let record1 = client.retire(&from, &project1, &2025, &100, &false, &zero(env));
@@ -368,7 +381,7 @@ fn retire_same_project_different_vintages() {
     let project_id = sample_project_id(env);
 
     // Fund a 2024 vintage too.
-    registry_client.request_mint(&project_id, &2024, &1000, &sample_proof(env));
+    registry_client.request_mint(&project_id, &2024, &1000, &sample_proof(env, &project_id));
     token_client.transfer(&stack.registry_id, &from, &1000);
 
     let record1 = client.retire(&from, &project_id, &2024, &100, &false, &zero(env));

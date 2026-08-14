@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use cambium_credit_token::CreditTokenContract;
-use cambium_marketplace::MarketplaceContract;
+use cambium_marketplace::{MarketplaceContract, PoolConfig};
 use cambium_registry::{Project, RegistryContract};
 use cambium_retirement::RetirementContract;
 use cambium_shared::{Proof, RetireeRef};
@@ -86,6 +86,15 @@ fn deploy_all() -> (
     )
 }
 
+/// Deploy a second credit-token contract to act as the paired asset in
+/// marketplace pools.
+fn deploy_paired_token(env: &Env) -> soroban_sdk::Address {
+    let paired_token_id = env.register_contract(None, CreditTokenContract);
+    let paired_client = cambium_credit_token::CreditTokenContractClient::new(env, &paired_token_id);
+    paired_client.initialize(&soroban_sdk::Address::generate(env));
+    paired_token_id
+}
+
 /// Full lifecycle test: register project → request mint → verify (mocked true) →
 /// credits appear in credit-token balance → swap via marketplace → retire via
 /// retirement → confirm retirement record and updated vintage totals in registry.
@@ -146,23 +155,45 @@ fn full_lifecycle_register_mint_swap_retire() {
     assert_eq!(token_client.balance(&user), 500);
     assert_eq!(token_client.balance(&registry_id), 500);
 
+    // Fund the user with a paired asset and extra credits so they can act as
+    // both the pool's initial liquidity provider and the trader. The credit
+    // token is used as the paired asset surrogate.
+    let paired_token_id = deploy_paired_token(&env);
+    let paired_client =
+        cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
+    token_client.mint(&user, &500);
+    paired_client.mint(&user, &2500);
+    assert_eq!(token_client.balance(&user), 1000);
+
     // --- Step 4: Create a marketplace pool and swap ---
     let pool_id = BytesN::from_array(&env, &[2u8; 32]);
     let paired_asset = Symbol::new(&env, "XLM");
 
-    // Create pool with initial liquidity (from registry which has credits)
-    // First, approve marketplace to spend registry's credits
-    // Note: In real usage, the user would provide their own liquidity.
-    // For this test, we create a pool with the registry's remaining credits.
-    let pool =
-        marketplace_client.create_pool(&pool_id, &credit_token_id, &paired_asset, &500, &2500);
+    // The user escrows 500 credits / 2500 paired as the pool's initial
+    // liquidity (real token transfers happen on-chain).
+    let pool = marketplace_client.create_pool(
+        &user,
+        &pool_id,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: paired_asset.clone(),
+            initial_credit: 500,
+            initial_paired: 2500,
+            fee_bps: 0,
+        },
+    );
     assert_eq!(pool.credit_reserves, 500);
     assert_eq!(pool.paired_reserves, 2500);
 
     // User swaps 100 credit tokens for XLM
     // Expected: (2500 * 100) / (500 + 100) = 250000 / 600 ≈ 416
-    let amount_out = marketplace_client.swap(&pool_id, &100, &0);
+    let amount_out = marketplace_client.swap(&user, &pool_id, &100, &0);
     assert_eq!(amount_out, 416);
+
+    // Real settlement: the user spent 100 credits and received 416 paired.
+    assert_eq!(token_client.balance(&user), 400);
+    assert_eq!(paired_client.balance(&user), 416);
 
     // Verify pool reserves updated
     let updated_pool = marketplace_client.get_pool(&pool_id);
@@ -194,7 +225,7 @@ fn full_lifecycle_register_mint_swap_retire() {
     let shielded = retirement_client.retire(&user, &project_id, &2025, &100, &true, &nullifier);
     assert_eq!(shielded.retiree, RetireeRef::Shielded(nullifier.clone()));
     // The shielded retirement also consumed credits.
-    assert_eq!(token_client.balance(&user), 200);
+    assert_eq!(token_client.balance(&user), 100);
 
     // --- Step 7: Verify vintage totals ---
     let vintage = registry_client.get_vintage(&project_id, &2025);
@@ -266,14 +297,23 @@ fn orderbook_sell_then_buy_settles() {
         cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
     paired_client.initialize(&soroban_sdk::Address::generate(&env));
 
-    // Create a pool for the order book to reference.
+    // Create a pool for the order book to reference. Fund an LP so the pool's
+    // initial liquidity is escrowed for real.
     let pool_id = BytesN::from_array(&env, &[3u8; 32]);
+    let lp = soroban_sdk::Address::generate(&env);
+    token_client.mint(&lp, &1000);
+    paired_client.mint(&lp, &5000);
     marketplace_client.create_pool(
+        &lp,
         &pool_id,
-        &credit_token_id,
-        &Symbol::new(&env, "USDC"),
-        &1000,
-        &5000,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: Symbol::new(&env, "USDC"),
+            initial_credit: 1000,
+            initial_paired: 5000,
+            fee_bps: 0,
+        },
     );
 
     let seller = soroban_sdk::Address::generate(&env);
@@ -367,15 +407,44 @@ fn duplicate_pool_creation_fails() {
         _retirement_id,
         _signer,
     ) = deploy_all();
+    let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
     let marketplace_client =
         cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
 
     let pool_id = BytesN::from_array(&env, &[1u8; 32]);
     let paired_asset = Symbol::new(&env, "XLM");
-    marketplace_client.create_pool(&pool_id, &credit_token_id, &paired_asset, &100, &500);
+    let paired_token_id = deploy_paired_token(&env);
+    let paired_client =
+        cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
 
-    let result =
-        marketplace_client.try_create_pool(&pool_id, &credit_token_id, &paired_asset, &100, &500);
+    let lp = soroban_sdk::Address::generate(&env);
+    token_client.mint(&lp, &100);
+    paired_client.mint(&lp, &500);
+    marketplace_client.create_pool(
+        &lp,
+        &pool_id,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: paired_asset.clone(),
+            initial_credit: 100,
+            initial_paired: 500,
+            fee_bps: 0,
+        },
+    );
+
+    let result = marketplace_client.try_create_pool(
+        &lp,
+        &pool_id,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: paired_asset.clone(),
+            initial_credit: 100,
+            initial_paired: 500,
+            fee_bps: 0,
+        },
+    );
     assert_eq!(result, Err(Ok(cambium_shared::Error::AlreadyRegistered)));
 }
 
@@ -396,9 +465,21 @@ fn create_pool_nonpositive_fails() {
 
     let pool_id = BytesN::from_array(&env, &[1u8; 32]);
     let paired_asset = Symbol::new(&env, "XLM");
+    let paired_token_id = deploy_paired_token(&env);
+    let creator = soroban_sdk::Address::generate(&env);
 
-    let result =
-        marketplace_client.try_create_pool(&pool_id, &credit_token_id, &paired_asset, &0, &500);
+    let result = marketplace_client.try_create_pool(
+        &creator,
+        &pool_id,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: paired_asset.clone(),
+            initial_credit: 0,
+            initial_paired: 500,
+            fee_bps: 0,
+        },
+    );
     assert_eq!(result, Err(Ok(cambium_shared::Error::NonPositiveAmount)));
 }
 
@@ -438,7 +519,8 @@ fn swap_nonexistent_pool_fails() {
         cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
 
     let fake_pool = BytesN::from_array(&env, &[99u8; 32]);
-    let result = marketplace_client.try_swap(&fake_pool, &100, &0);
+    let trader = soroban_sdk::Address::generate(&env);
+    let result = marketplace_client.try_swap(&trader, &fake_pool, &100, &0);
     assert_eq!(result, Err(Ok(cambium_shared::Error::PoolNotFound)));
 }
 
@@ -638,18 +720,26 @@ fn cancel_order_refunds_escrow() {
     let marketplace_client =
         cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
 
-    let paired_token_id = env.register_contract(None, CreditTokenContract);
+    let paired_token_id = deploy_paired_token(&env);
     let paired_client =
         cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
-    paired_client.initialize(&soroban_sdk::Address::generate(&env));
 
+    // Fund an LP so the pool's initial liquidity is escrowed for real.
     let pool_id = BytesN::from_array(&env, &[3u8; 32]);
+    let lp = soroban_sdk::Address::generate(&env);
+    token_client.mint(&lp, &1000);
+    paired_client.mint(&lp, &5000);
     marketplace_client.create_pool(
+        &lp,
         &pool_id,
-        &credit_token_id,
-        &Symbol::new(&env, "USDC"),
-        &1000,
-        &5000,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: Symbol::new(&env, "USDC"),
+            initial_credit: 1000,
+            initial_paired: 5000,
+            fee_bps: 0,
+        },
     );
 
     let seller = soroban_sdk::Address::generate(&env);
