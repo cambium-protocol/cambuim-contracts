@@ -41,10 +41,10 @@ fn setup() -> (Env, Address, RegistryContractClient<'static>, Address) {
     (env, registry_id, registry_client, credit_token_id)
 }
 
-fn sample_proof(env: &Env) -> Proof {
+fn sample_proof(env: &Env, project_id: &BytesN<32>) -> Proof {
     Proof {
         proof_data: Bytes::from_array(env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![env, BytesN::from_array(env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![env, project_id.clone()],
     }
 }
 
@@ -63,6 +63,24 @@ fn make_project(env: &Env, id_byte: u8) -> Project {
         external_registry_ref: None,
         verifying_key_version: 1,
     }
+}
+
+/// Bootstrap a canonical verifying key (version 1) for the "VM0007"
+/// methodology so that projects registered at `verifying_key_version: 1`
+/// (see `make_project`) can mint. Returns the governance signer.
+fn bootstrap_vkey(env: &Env, client: &RegistryContractClient<'static>) -> Address {
+    let signer = Address::generate(env);
+    client.init_governance(&1, &soroban_sdk::vec![env, signer.clone()], &3600);
+    let proposal_id = client.propose_vkey_update(
+        &signer,
+        &Symbol::new(env, "VM0007"),
+        &BytesN::from_array(env, &[5u8; 32]),
+    );
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    let vkey = client.execute_vkey_update(&proposal_id);
+    assert_eq!(vkey.version, 1);
+    signer
 }
 
 // ---- initialize tests ----
@@ -154,8 +172,9 @@ fn request_mint_creates_vintage_and_updates_issued() {
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
+    bootstrap_vkey(&env, &client);
 
-    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
 
     let vintage = client.get_vintage(&project_id, &2025);
     assert_eq!(
@@ -175,9 +194,10 @@ fn request_mint_accumulates_issuance() {
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
+    bootstrap_vkey(&env, &client);
 
-    client.request_mint(&project_id, &2025, &500, &sample_proof(&env));
-    client.request_mint(&project_id, &2025, &300, &sample_proof(&env));
+    client.request_mint(&project_id, &2025, &500, &sample_proof(&env, &project_id));
+    client.request_mint(&project_id, &2025, &300, &sample_proof(&env, &project_id));
 
     let vintage = client.get_vintage(&project_id, &2025);
     assert_eq!(
@@ -195,7 +215,7 @@ fn request_mint_accumulates_issuance() {
 fn request_mint_fails_on_missing_project() {
     let (env, _, client, _) = setup();
     let missing = BytesN::from_array(&env, &[99u8; 32]);
-    let result = client.try_request_mint(&missing, &2025, &1000, &sample_proof(&env));
+    let result = client.try_request_mint(&missing, &2025, &1000, &sample_proof(&env, &missing));
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
 
@@ -206,7 +226,7 @@ fn request_mint_fails_on_zero_amount() {
     let project_id = project.id.clone();
     client.register_project(&project);
 
-    let result = client.try_request_mint(&project_id, &2025, &0, &sample_proof(&env));
+    let result = client.try_request_mint(&project_id, &2025, &0, &sample_proof(&env, &project_id));
     assert_eq!(result, Err(Ok(Error::NonPositiveAmount)));
 }
 
@@ -217,7 +237,8 @@ fn request_mint_fails_on_negative_amount() {
     let project_id = project.id.clone();
     client.register_project(&project);
 
-    let result = client.try_request_mint(&project_id, &2025, &-100, &sample_proof(&env));
+    let result =
+        client.try_request_mint(&project_id, &2025, &-100, &sample_proof(&env, &project_id));
     assert_eq!(result, Err(Ok(Error::NonPositiveAmount)));
 }
 
@@ -227,9 +248,48 @@ fn request_mint_fails_on_empty_proof() {
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
+    bootstrap_vkey(&env, &client);
 
     let result = client.try_request_mint(&project_id, &2025, &1000, &empty_proof(&env));
     assert_eq!(result, Err(Ok(Error::InvalidProof)));
+}
+
+#[test]
+fn request_mint_fails_without_canonical_vkey() {
+    let (env, _, client, _) = setup();
+    let project = make_project(&env, 1);
+    let project_id = project.id.clone();
+    client.register_project(&project);
+    // No governance/vkey has ever been configured for the methodology.
+
+    let result =
+        client.try_request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
+    assert_eq!(result, Err(Ok(Error::VkeyNotFound)));
+}
+
+#[test]
+fn request_mint_fails_on_stale_project_key_version() {
+    let (env, _, client, _) = setup();
+    // Register the project at key version 1, but rotate the canonical key to
+    // version 2 before minting.
+    let project = make_project(&env, 1);
+    let project_id = project.id.clone();
+    client.register_project(&project);
+
+    let signer = bootstrap_vkey(&env, &client);
+    let proposal_id = client.propose_vkey_update(
+        &signer,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[6u8; 32]),
+    );
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    let vkey = client.execute_vkey_update(&proposal_id);
+    assert_eq!(vkey.version, 2);
+
+    let result =
+        client.try_request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
+    assert_eq!(result, Err(Ok(Error::VkeyMismatch)));
 }
 
 #[test]
@@ -238,9 +298,10 @@ fn request_mint_separate_vintages() {
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
+    bootstrap_vkey(&env, &client);
 
-    client.request_mint(&project_id, &2024, &500, &sample_proof(&env));
-    client.request_mint(&project_id, &2025, &700, &sample_proof(&env));
+    client.request_mint(&project_id, &2024, &500, &sample_proof(&env, &project_id));
+    client.request_mint(&project_id, &2025, &700, &sample_proof(&env, &project_id));
 
     let v2024 = client.get_vintage(&project_id, &2024);
     let v2025 = client.get_vintage(&project_id, &2025);
@@ -274,10 +335,11 @@ fn request_mint_issues_tokens_to_registry() {
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
+    bootstrap_vkey(&env, &client);
 
     let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
 
-    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
 
     // Registry (the caller of mint) should hold the minted tokens.
     assert_eq!(token_client.balance(&registry_addr), 1000);
@@ -493,16 +555,15 @@ fn set_retirement_contract_requires_signer() {
 #[test]
 fn record_retirement_updates_vintage() {
     let (env, _registry_addr, client, _credit_token_id) = setup();
-    let signer = Address::generate(&env);
     let retirement = Address::generate(&env);
-    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    let signer = bootstrap_vkey(&env, &client);
     client.set_retirement_contract(&signer, &retirement);
 
     // Register project + mint 1000 so a vintage exists.
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
-    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
 
     // With mock auths, the registered retirement contract is authorized.
     client.record_retirement(&project_id, &2025, &400);
@@ -519,15 +580,14 @@ fn record_retirement_updates_vintage() {
 #[test]
 fn record_retirement_requires_authorized_contract() {
     let (env, _registry_addr, client, _credit_token_id) = setup();
-    let signer = Address::generate(&env);
     let retirement = Address::generate(&env);
-    client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
+    let signer = bootstrap_vkey(&env, &client);
     client.set_retirement_contract(&signer, &retirement);
 
     let project = make_project(&env, 1);
     let project_id = project.id.clone();
     client.register_project(&project);
-    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env));
+    client.request_mint(&project_id, &2025, &1000, &sample_proof(&env, &project_id));
 
     // Remove all mocked auths: recording without the retirement contract's
     // authorization must fail, since the caller is not the registered contract.

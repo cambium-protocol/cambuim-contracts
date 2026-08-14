@@ -60,6 +60,18 @@ fn deploy_all() -> (
     registry_client.init_governance(&1, &soroban_sdk::vec![&env, signer.clone()], &3600);
     registry_client.set_retirement_contract(&signer, &retirement_id);
 
+    // Bootstrap a canonical verifying key (version 1) for the "VM0007"
+    // methodology so projects registered at `verifying_key_version: 1` can
+    // mint (request_mint now enforces the canonical key binding).
+    let proposal_id = registry_client.propose_vkey_update(
+        &signer,
+        &Symbol::new(&env, "VM0007"),
+        &BytesN::from_array(&env, &[5u8; 32]),
+    );
+    let now = env.ledger().timestamp();
+    env.ledger().set_timestamp(now + 4000);
+    registry_client.execute_vkey_update(&proposal_id);
+
     // Authorize the retirement contract to burn credits.
     token_client.set_burner(&retirement_id);
 
@@ -111,9 +123,10 @@ fn full_lifecycle_register_mint_swap_retire() {
     assert_eq!(fetched_project, project);
 
     // --- Step 2: Request mint (triggers zk-verifier verify call) ---
+    // The proof's public inputs must commit to the project being minted.
     let proof = Proof {
         proof_data: Bytes::from_array(&env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![&env, BytesN::from_array(&env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![&env, project_id.clone()],
     };
 
     registry_client.request_mint(&project_id, &2025, &1000, &proof);
@@ -206,14 +219,27 @@ fn verifier_mock_always_passes() {
 
     let zk_client = cambium_zk_verifier::ZkVerifierContractClient::new(&env, &zk_verifier_id);
 
+    // The mock enforces that the proof commits to the project and that a live
+    // canonical verifying key is supplied, mirroring the real Groth16 wiring.
+    let project_id = BytesN::from_array(&env, &[7u8; 32]);
     let proof = Proof {
         proof_data: Bytes::from_array(&env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![&env, BytesN::from_array(&env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![&env, project_id.clone()],
     };
 
-    let public_inputs = soroban_sdk::vec![&env, BytesN::from_array(&env, &[1u8; 32])];
-    let result = zk_client.verify(&proof, &public_inputs);
+    let public_inputs = soroban_sdk::vec![&env, project_id.clone()];
+    let vkey_key = BytesN::from_array(&env, &[5u8; 32]);
+    let result = zk_client.verify(&proof, &public_inputs, &project_id, &1, &vkey_key);
     assert!(result);
+
+    // A proof committed to a different project is rejected even when a live
+    // canonical key is supplied.
+    let other_project = BytesN::from_array(&env, &[8u8; 32]);
+    let mismatch = soroban_sdk::vec![&env, other_project];
+    assert_eq!(
+        zk_client.try_verify(&proof, &mismatch, &project_id, &1, &vkey_key),
+        Err(Ok(cambium_shared::Error::InvalidProof))
+    );
 }
 
 /// Test the limit order book end-to-end: a resting sell order is taken by a
@@ -438,6 +464,9 @@ fn get_nonexistent_retirement_fails() {
 /// Test the full governance flow end-to-end: a verifying-key update is
 /// proposed (the proposer's vote is recorded), execution is blocked until the
 /// timelock elapses, and then the new canonical key is applied.
+///
+/// `deploy_all` bootstraps VM0007 to key version 1, so this update rotates it
+/// to version 2.
 #[test]
 fn governance_vkey_update_full_flow() {
     let (
@@ -467,7 +496,7 @@ fn governance_vkey_update_full_flow() {
     let now = env.ledger().timestamp();
     env.ledger().set_timestamp(now + 4000);
     let vkey = registry_client.execute_vkey_update(&proposal_id);
-    assert_eq!(vkey.version, 1);
+    assert_eq!(vkey.version, 2);
     assert_eq!(vkey.key, new_key);
 
     let canonical = registry_client.get_vkey(&methodology);
@@ -504,7 +533,7 @@ fn shielded_retirement_rejects_nullifier_replay() {
 
     let proof = Proof {
         proof_data: Bytes::from_array(&env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![&env, BytesN::from_array(&env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![&env, project_id.clone()],
     };
     registry_client.request_mint(&project_id, &2025, &1000, &proof);
 
@@ -554,7 +583,7 @@ fn allowlist_gates_credit_transfers() {
 
     let proof = Proof {
         proof_data: Bytes::from_array(&env, &[1u8, 2, 3, 4]),
-        public_inputs: soroban_sdk::vec![&env, BytesN::from_array(&env, &[0u8; 32])],
+        public_inputs: soroban_sdk::vec![&env, project_id.clone()],
     };
     registry_client.request_mint(&project_id, &2025, &1000, &proof);
 

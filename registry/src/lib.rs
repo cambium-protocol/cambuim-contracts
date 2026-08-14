@@ -59,13 +59,18 @@ impl RegistryContract {
     /// Request a mint for a given project + vintage year.
     ///
     /// The proof is verified by the zk-verifier contract via a cross-contract
-    /// call. If the verifier returns false or errors, the mint is rejected.
+    /// call, bound to the canonical verifying key for the project's
+    /// methodology. If the verifier returns false or errors, the mint is
+    /// rejected.
     ///
     /// On success the function:
     /// 1. Validates inputs (project exists, amount > 0, proof non-empty).
-    /// 2. Calls zk-verifier::verify to validate the proof.
-    /// 3. Creates or updates the `Vintage` record.
-    /// 4. Calls `credit-token::mint` to issue tokens to the requesting caller.
+    /// 2. Loads the canonical `VkeyState` for the project's methodology and
+    ///    checks the project was registered against the current key version.
+    /// 3. Calls `zk-verifier::verify` with the canonical key and the project
+    ///    id, so the proof is bound to this project.
+    /// 4. Creates or updates the `Vintage` record.
+    /// 5. Calls `credit-token::mint` to issue tokens to the requesting caller.
     pub fn request_mint(
         env: Env,
         project_id: BytesN<32>,
@@ -79,14 +84,32 @@ impl RegistryContract {
         }
 
         // Project must be registered.
-        let _project: Project = env
+        let project: Project = env
             .storage()
             .persistent()
             .get(&DataKey::Project(project_id.clone()))
             .ok_or(Error::NotFound)?;
 
-        // --- 2. Cross-contract proof verification ---
-        // Call zk-verifier::verify(proof, public_inputs) -> Result<bool, Error>
+        // --- 2. Bind the mint to the canonical verifying key ---
+        // A project may only mint against the key version its methodology
+        // currently governs. If the key was rotated since registration, the
+        // project must be re-registered at the new version — otherwise a
+        // revoked/compromised key could keep minting.
+        let vkey: VkeyState = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vkey(project.methodology.clone()))
+            .ok_or(Error::VkeyNotFound)?;
+        if vkey.version == 0 {
+            return Err(Error::VkeyNotFound);
+        }
+        if project.verifying_key_version != vkey.version {
+            return Err(Error::VkeyMismatch);
+        }
+
+        // --- 3. Cross-contract proof verification ---
+        // Call zk-verifier::verify(proof, public_inputs, project_id,
+        // vkey_version, vkey_key) -> Result<bool, Error>
         let zk_verifier: Address = env
             .storage()
             .instance()
@@ -100,6 +123,9 @@ impl RegistryContract {
                 &env,
                 proof.into_val(&env),
                 proof.public_inputs.into_val(&env),
+                project_id.into_val(&env),
+                vkey.version.into_val(&env),
+                vkey.key.into_val(&env),
             ],
         );
 

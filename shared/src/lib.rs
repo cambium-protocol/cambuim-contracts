@@ -73,4 +73,14 @@ pub enum Error {
     InvalidConfig = 15,
     /// A shielded retirement was requested with an empty/invalid nullifier.
     InvalidNullifier = 16,
+    /// No canonical verifying key has been configured for a methodology, so
+    /// no proof can be verified against it.
+    VkeyNotFound = 17,
+    /// A project was registered against a verifying-key version that no
+    /// longer matches the canonical key for its methodology.
+    VkeyMismatch = 18,
+    /// An execute/cancel entry point was called with a proposal whose target
+    /// does not match the function (e.g. executing a governance update via
+    /// the verifying-key entry point).
+    InvalidProposalTarget = 19,
 }
