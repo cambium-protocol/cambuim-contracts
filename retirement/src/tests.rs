@@ -402,3 +402,108 @@ fn get_retirement_not_found() {
     let result = client.try_get_retirement(&missing);
     assert_eq!(result, Err(Ok(Error::RetirementNotFound)));
 }
+
+// ---- enumeration / collision-proof id tests ----
+
+#[test]
+fn retire_records_are_enumerable_by_project() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+
+    let record1 = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
+    let record2 = client.retire(&from, &project_id, &2025, &200, &false, &zero(env));
+
+    let ids = client.get_retirement_ids(&project_id);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.get(0).unwrap(), record1.id);
+    assert_eq!(ids.get(1).unwrap(), record2.id);
+
+    let records = client.get_retirements_by_project(&project_id);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records.get(0).unwrap(), record1);
+    assert_eq!(records.get(1).unwrap(), record2);
+}
+
+#[test]
+fn retire_ids_are_scoped_per_project() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+
+    let project1 = sample_project_id(&stack.env);
+    let project2 = BytesN::from_array(&stack.env, &[2u8; 32]);
+    let registry_client = RegistryContractClient::new(&stack.env, &stack.registry_id);
+    let project2_struct = Project {
+        id: project2.clone(),
+        methodology: Symbol::new(env, "VM0007"),
+        geography: Symbol::new(env, "KEN"),
+        external_registry_ref: None,
+        verifying_key_version: 1,
+    };
+    registry_client.register_project(&project2_struct);
+    registry_client.request_mint(&project2, &2025, &1000, &sample_proof(env, &project2));
+    let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
+    token_client.transfer(&stack.registry_id, &from, &500);
+
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+    client.retire(&from, &project1, &2025, &100, &false, &zero(env));
+    client.retire(&from, &project2, &2025, &100, &false, &zero(env));
+
+    // Each project's list only contains its own retirements.
+    assert_eq!(client.get_retirement_ids(&project1).len(), 1);
+    assert_eq!(client.get_retirement_ids(&project2).len(), 1);
+    assert_eq!(
+        client
+            .get_retirements_by_project(&project1)
+            .get(0)
+            .unwrap()
+            .project_id,
+        project1
+    );
+    assert_eq!(
+        client
+            .get_retirements_by_project(&project2)
+            .get(0)
+            .unwrap()
+            .project_id,
+        project2
+    );
+}
+
+#[test]
+fn total_retirements_counts_all_projects() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+
+    assert_eq!(client.total_retirements(), 0);
+    client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
+    client.retire(&from, &project_id, &2025, &200, &false, &zero(env));
+    assert_eq!(client.total_retirements(), 2);
+}
+
+#[test]
+fn identical_retirements_get_distinct_ids() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+
+    // Same project, same year, same amount in the same ledger: the monotonic
+    // counter in the id ensures the records are distinct.
+    let record1 = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
+    let record2 = client.retire(&from, &project_id, &2025, &100, &false, &zero(env));
+
+    assert_ne!(record1.id, record2.id);
+    assert_eq!(client.get_retirements_by_project(&project_id).len(), 2);
+}

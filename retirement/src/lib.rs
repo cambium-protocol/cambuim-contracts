@@ -1,7 +1,9 @@
 #![cfg_attr(not(test), no_std)]
 
 use cambium_shared::{Error, RetireeRef};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Vec,
+};
 
 /// A retirement record storing details about a credit retirement event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,10 @@ enum DataKey {
     Retirement(BytesN<32>),
     /// Nullifiers consumed by shielded retirements (replay guard).
     Nullified(BytesN<32>),
+    /// Ids of retirement records per project, in retirement order.
+    RetirementIdsByProject(BytesN<32>),
+    /// Monotonic counter used to mint collision-proof record ids.
+    RetirementCount,
     CreditToken,
     Registry,
     Initialized,
@@ -148,12 +154,24 @@ impl RetirementContract {
             _ => return Err(Error::RetirementNotFound),
         }
 
-        // Generate a unique retirement record ID
+        // Generate a unique, collision-proof retirement record ID. The
+        // monotonic counter guarantees two identical retirements in the same
+        // ledger (same project, year, amount, sequence) still diverge.
+        let counter: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RetirementCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::RetirementCount, &(counter + 1));
+
         let mut id_bytes = soroban_sdk::Bytes::new(&env);
         id_bytes.extend_from_slice(&project_id.to_array());
         id_bytes.extend_from_slice(&vintage_year.to_be_bytes());
         id_bytes.extend_from_slice(&amount.to_be_bytes());
         id_bytes.extend_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
+        id_bytes.extend_from_slice(&counter.to_be_bytes());
         let record_id: BytesN<32> = env.crypto().keccak256(&id_bytes).into();
 
         // Consume the nullifier so the shielded claim cannot be replayed.
@@ -178,10 +196,21 @@ impl RetirementContract {
             retiree,
         };
 
-        // Store the record
+        // Store the record and append its id to the project's list so
+        // retirements are enumerable on-chain.
         env.storage()
             .persistent()
             .set(&DataKey::Retirement(record_id.clone()), &record);
+        let mut project_ids: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RetirementIdsByProject(project_id.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        project_ids.push_back(record_id.clone());
+        env.storage().persistent().set(
+            &DataKey::RetirementIdsByProject(project_id.clone()),
+            &project_ids,
+        );
 
         // Emit retirement event. For shielded retirements the caller's
         // address is deliberately omitted so identity never leaks on-chain.
@@ -204,6 +233,35 @@ impl RetirementContract {
             .persistent()
             .get(&DataKey::Retirement(id))
             .ok_or(Error::RetirementNotFound)
+    }
+
+    /// Total number of retirements recorded, across all projects.
+    pub fn total_retirements(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RetirementCount)
+            .unwrap_or(0)
+    }
+
+    /// Ids of all retirements for a project, in retirement order.
+    pub fn get_retirement_ids(env: Env, project_id: BytesN<32>) -> Vec<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RetirementIdsByProject(project_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Full retirement records for a project, in retirement order.
+    pub fn get_retirements_by_project(env: Env, project_id: BytesN<32>) -> Vec<RetirementRecord> {
+        let ids = Self::get_retirement_ids(env.clone(), project_id);
+        let mut records = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if let Some(record) = env.storage().persistent().get(&DataKey::Retirement(id)) {
+                records.push_back(record);
+            }
+        }
+        records
     }
 }
 

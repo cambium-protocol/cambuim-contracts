@@ -233,6 +233,17 @@ fn full_lifecycle_register_mint_swap_retire() {
     // The retirement contract records retirements against the vintage, so
     // cumulative retired supply is tracked and double-counting is prevented.
     assert_eq!(vintage.total_retired, retire_amount + 100);
+
+    // --- Step 8: Verify retirements are enumerable on-chain ---
+    assert_eq!(retirement_client.total_retirements(), 2);
+    let ids = retirement_client.get_retirement_ids(&project_id);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.get(0).unwrap(), record.id);
+    assert_eq!(ids.get(1).unwrap(), shielded.id);
+    let records = retirement_client.get_retirements_by_project(&project_id);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records.get(0).unwrap(), record);
+    assert_eq!(records.get(1).unwrap(), shielded);
 }
 
 /// Test that the verifier is called and mock returns true.
