@@ -37,6 +37,16 @@ pub struct Proof {
     pub public_inputs: soroban_sdk::Vec<BytesN<32>>,
 }
 
+/// Minimum TTL threshold (in ledgers) used as the `threshold` argument when
+/// refreshing persistent entries. An entry whose remaining lifetime drops
+/// below this value is extended back up to `TARGET_LEDGER_TTL`.
+pub const MIN_LEDGER_TTL: u32 = 600_000; // ~35 days at 5s/ledger
+
+/// Target lifetime (in ledgers) that persistent entries are extended toward on
+/// each read/write, keeping critical project, vintage, and retirement records
+/// alive. Capped at the Soroban protocol maximum (5,040,000 ledgers ≈ 1 year).
+pub const TARGET_LEDGER_TTL: u32 = 5_040_000; // ~1 year at 5s/ledger
+
 /// Errors shared across Cambium contracts.
 #[derive(Clone, Debug, Eq, PartialEq, Copy)]
 #[contracterror]

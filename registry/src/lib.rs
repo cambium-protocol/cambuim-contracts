@@ -6,10 +6,19 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-use cambium_shared::{Error, Proof};
+use cambium_shared::{Error, Proof, MIN_LEDGER_TTL, TARGET_LEDGER_TTL};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, IntoVal, Symbol, Vec};
 
 pub use types::{DataKey, GovernanceConfig, Project, Proposal, ProposalTarget, Vintage, VkeyState};
+
+/// Refresh the TTL of a persistent storage entry so it is not evicted. Called
+/// after every `persistent().set()` and on every hit of a critical
+/// `persistent().get()`.
+fn refresh_ttl(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, MIN_LEDGER_TTL, TARGET_LEDGER_TTL);
+}
 
 #[contract]
 pub struct RegistryContract;
@@ -59,23 +68,30 @@ impl RegistryContract {
             return Err(Error::AlreadyRegistered);
         }
         env.storage().persistent().set(&key, &project);
+        refresh_ttl(&env, &key);
         Ok(())
     }
 
     /// Look up a registered project by id.
     pub fn get_project(env: Env, project_id: BytesN<32>) -> Result<Project, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Project(project_id))
-            .ok_or(Error::NotFound)
+        let key = DataKey::Project(project_id);
+        if let Some(project) = env.storage().persistent().get(&key) {
+            refresh_ttl(&env, &key);
+            Ok(project)
+        } else {
+            Err(Error::NotFound)
+        }
     }
 
     /// Look up a vintage record by project id and year.
     pub fn get_vintage(env: Env, project_id: BytesN<32>, year: u32) -> Result<Vintage, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Vintage(project_id, year))
-            .ok_or(Error::NotFound)
+        let key = DataKey::Vintage(project_id, year);
+        if let Some(vintage) = env.storage().persistent().get(&key) {
+            refresh_ttl(&env, &key);
+            Ok(vintage)
+        } else {
+            Err(Error::NotFound)
+        }
     }
 
     /// Request a mint for a given project + vintage year.
@@ -106,22 +122,28 @@ impl RegistryContract {
         }
 
         // Project must be registered.
-        let project: Project = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Project(project_id.clone()))
-            .ok_or(Error::NotFound)?;
+        let project_key = DataKey::Project(project_id.clone());
+        let project: Project = match env.storage().persistent().get(&project_key) {
+            Some(project) => {
+                refresh_ttl(&env, &project_key);
+                project
+            }
+            None => return Err(Error::NotFound),
+        };
 
         // --- 2. Bind the mint to the canonical verifying key ---
         // A project may only mint against the key version its methodology
         // currently governs. If the key was rotated since registration, the
         // project must be re-registered at the new version — otherwise a
         // revoked/compromised key could keep minting.
-        let vkey: VkeyState = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Vkey(project.methodology.clone()))
-            .ok_or(Error::VkeyNotFound)?;
+        let vkey_key = DataKey::Vkey(project.methodology.clone());
+        let vkey: VkeyState = match env.storage().persistent().get(&vkey_key) {
+            Some(vkey) => {
+                refresh_ttl(&env, &vkey_key);
+                vkey
+            }
+            None => return Err(Error::VkeyNotFound),
+        };
         if vkey.version == 0 {
             return Err(Error::VkeyNotFound);
         }
@@ -157,16 +179,18 @@ impl RegistryContract {
 
         // --- 3. Update vintage ---
         let vintage_key = DataKey::Vintage(project_id.clone(), vintage_year);
-        let mut vintage: Vintage =
-            env.storage()
-                .persistent()
-                .get(&vintage_key)
-                .unwrap_or(Vintage {
-                    project_id: project_id.clone(),
-                    year: vintage_year,
-                    total_issued: 0,
-                    total_retired: 0,
-                });
+        let mut vintage: Vintage = match env.storage().persistent().get(&vintage_key) {
+            Some(vintage) => {
+                refresh_ttl(&env, &vintage_key);
+                vintage
+            }
+            None => Vintage {
+                project_id: project_id.clone(),
+                year: vintage_year,
+                total_issued: 0,
+                total_retired: 0,
+            },
+        };
 
         vintage.total_issued = vintage
             .total_issued
@@ -174,6 +198,7 @@ impl RegistryContract {
             .ok_or(Error::Overflow)?;
 
         env.storage().persistent().set(&vintage_key, &vintage);
+        refresh_ttl(&env, &vintage_key);
 
         // --- 4. Cross-contract mint ---
         // The registry is the only authorized caller of credit-token::mint.
@@ -247,11 +272,13 @@ impl RegistryContract {
         retirement.require_auth();
 
         let vintage_key = DataKey::Vintage(project_id.clone(), vintage_year);
-        let mut vintage: Vintage = env
-            .storage()
-            .persistent()
-            .get(&vintage_key)
-            .ok_or(Error::NotFound)?;
+        let mut vintage: Vintage = match env.storage().persistent().get(&vintage_key) {
+            Some(vintage) => {
+                refresh_ttl(&env, &vintage_key);
+                vintage
+            }
+            None => return Err(Error::NotFound),
+        };
 
         let new_retired = vintage
             .total_retired
@@ -263,6 +290,7 @@ impl RegistryContract {
         vintage.total_retired = new_retired;
 
         env.storage().persistent().set(&vintage_key, &vintage);
+        refresh_ttl(&env, &vintage_key);
 
         env.events().publish(
             (
@@ -320,13 +348,16 @@ impl RegistryContract {
     ///
     /// Returns a zero-initialized state (version 0) if none has been set.
     pub fn get_vkey(env: Env, methodology: Symbol) -> VkeyState {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Vkey(methodology))
-            .unwrap_or(VkeyState {
+        let key = DataKey::Vkey(methodology);
+        if let Some(vkey) = env.storage().persistent().get(&key) {
+            refresh_ttl(&env, &key);
+            vkey
+        } else {
+            VkeyState {
                 version: 0,
                 key: BytesN::from_array(&env, &[0u8; 32]),
-            })
+            }
+        }
     }
 
     /// Propose a protocol update governed by multi-sig approval and a
@@ -365,6 +396,7 @@ impl RegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(id.clone()), &stored);
+        refresh_ttl(&env, &DataKey::Proposal(id.clone()));
         Ok(id)
     }
 
@@ -408,11 +440,13 @@ impl RegistryContract {
         }
 
         let key = DataKey::Proposal(proposal_id.clone());
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
+        let mut proposal: Proposal = match env.storage().persistent().get(&key) {
+            Some(proposal) => {
+                refresh_ttl(&env, &key);
+                proposal
+            }
+            None => return Err(Error::NotFound),
+        };
 
         if proposal.executed || proposal.cancelled {
             return Err(Error::OrderClosed);
@@ -424,15 +458,20 @@ impl RegistryContract {
         proposal.approvals.push_back(signer);
         let approvals = proposal.approvals.len();
         env.storage().persistent().set(&key, &proposal);
+        refresh_ttl(&env, &key);
         Ok(approvals)
     }
 
     /// Return a stored proposal, or `Error::NotFound`.
     pub fn get_proposal(env: Env, proposal_id: BytesN<32>) -> Result<Proposal, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .ok_or(Error::NotFound)
+        let key = DataKey::Proposal(proposal_id);
+        match env.storage().persistent().get(&key) {
+            Some(proposal) => {
+                refresh_ttl(&env, &key);
+                Ok(proposal)
+            }
+            None => Err(Error::NotFound),
+        }
     }
 
     /// Cancel a pending proposal before it executes.
@@ -447,11 +486,13 @@ impl RegistryContract {
         }
 
         let key = DataKey::Proposal(proposal_id.clone());
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
+        let mut proposal: Proposal = match env.storage().persistent().get(&key) {
+            Some(proposal) => {
+                refresh_ttl(&env, &key);
+                proposal
+            }
+            None => return Err(Error::NotFound),
+        };
 
         if proposal.executed || proposal.cancelled {
             return Err(Error::OrderClosed);
@@ -459,6 +500,7 @@ impl RegistryContract {
 
         proposal.cancelled = true;
         env.storage().persistent().set(&key, &proposal);
+        refresh_ttl(&env, &key);
         Ok(())
     }
 
@@ -473,11 +515,13 @@ impl RegistryContract {
         let cfg = governance::config(&env)?;
 
         let key = DataKey::Proposal(proposal_id.clone());
-        let mut applied: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
+        let mut applied: Proposal = match env.storage().persistent().get(&key) {
+            Some(applied) => {
+                refresh_ttl(&env, &key);
+                applied
+            }
+            None => return Err(Error::NotFound),
+        };
 
         let ProposalTarget::Vkey(methodology, new_key) = applied.target.clone() else {
             return Err(Error::InvalidProposalTarget);
@@ -498,21 +542,25 @@ impl RegistryContract {
         // Compute the new key state first so a failure can't leave the
         // proposal marked executed without the key being applied.
         let vkey_key = DataKey::Vkey(methodology.clone());
-        let mut vkey: VkeyState = env
-            .storage()
-            .persistent()
-            .get(&vkey_key)
-            .unwrap_or(VkeyState {
+        let mut vkey: VkeyState = match env.storage().persistent().get(&vkey_key) {
+            Some(vkey) => {
+                refresh_ttl(&env, &vkey_key);
+                vkey
+            }
+            None => VkeyState {
                 version: 0,
                 key: BytesN::from_array(&env, &[0u8; 32]),
-            });
+            },
+        };
         vkey.version = vkey.version.checked_add(1).ok_or(Error::Overflow)?;
         vkey.key = new_key.clone();
 
         // Mark executed before applying to avoid re-entrant double execution.
         applied.executed = true;
         env.storage().persistent().set(&key, &applied);
+        refresh_ttl(&env, &key);
         env.storage().persistent().set(&vkey_key, &vkey);
+        refresh_ttl(&env, &vkey_key);
 
         // Emit the governance event for indexers.
         env.events().publish(
@@ -532,11 +580,13 @@ impl RegistryContract {
         let cfg = governance::config(&env)?;
 
         let key = DataKey::Proposal(proposal_id.clone());
-        let mut applied: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
+        let mut applied: Proposal = match env.storage().persistent().get(&key) {
+            Some(applied) => {
+                refresh_ttl(&env, &key);
+                applied
+            }
+            None => return Err(Error::NotFound),
+        };
 
         let ProposalTarget::Governance(config) = applied.target.clone() else {
             return Err(Error::InvalidProposalTarget);
@@ -565,6 +615,7 @@ impl RegistryContract {
 
         applied.executed = true;
         env.storage().persistent().set(&key, &applied);
+        refresh_ttl(&env, &key);
         env.storage()
             .instance()
             .set(&DataKey::GovernanceConfig, &config);

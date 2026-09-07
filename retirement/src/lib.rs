@@ -1,9 +1,18 @@
 #![cfg_attr(not(test), no_std)]
 
-use cambium_shared::{Error, RetireeRef};
+use cambium_shared::{Error, RetireeRef, MIN_LEDGER_TTL, TARGET_LEDGER_TTL};
 use soroban_sdk::{
     contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Vec,
 };
+
+/// Refresh the TTL of a persistent entry so retirement records and nullifiers
+/// are never evicted. Called after every `persistent().set()` and on every hit
+/// of a critical `persistent().get()`.
+fn refresh_ttl(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, MIN_LEDGER_TTL, TARGET_LEDGER_TTL);
+}
 
 /// A retirement record storing details about a credit retirement event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,6 +189,7 @@ impl RetirementContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Nullified(nullifier.clone()), &true);
+            refresh_ttl(&env, &DataKey::Nullified(nullifier.clone()));
         }
 
         // Create the retirement record
@@ -202,16 +212,22 @@ impl RetirementContract {
         env.storage()
             .persistent()
             .set(&DataKey::Retirement(record_id.clone()), &record);
-        let mut project_ids: Vec<BytesN<32>> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::RetirementIdsByProject(project_id.clone()))
-            .unwrap_or_else(|| Vec::new(&env));
+        refresh_ttl(&env, &DataKey::Retirement(record_id.clone()));
+        let total_ids_key = DataKey::RetirementIdsByProject(project_id.clone());
+        let mut project_ids: Vec<BytesN<32>> = match env.storage().persistent().get(&total_ids_key)
+        {
+            Some(ids) => {
+                refresh_ttl(&env, &total_ids_key);
+                ids
+            }
+            None => Vec::new(&env),
+        };
         project_ids.push_back(record_id.clone());
         env.storage().persistent().set(
             &DataKey::RetirementIdsByProject(project_id.clone()),
             &project_ids,
         );
+        refresh_ttl(&env, &DataKey::RetirementIdsByProject(project_id.clone()));
 
         // Emit retirement event. For shielded retirements the caller's
         // address is deliberately omitted so identity never leaks on-chain.
@@ -243,10 +259,14 @@ impl RetirementContract {
     /// # Errors
     /// * [`Error::RetirementNotFound`] - No record exists for the given `id`.
     pub fn get_retirement(env: Env, id: BytesN<32>) -> Result<RetirementRecord, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Retirement(id))
-            .ok_or(Error::RetirementNotFound)
+        let key = DataKey::Retirement(id);
+        match env.storage().persistent().get(&key) {
+            Some(record) => {
+                refresh_ttl(&env, &key);
+                Ok(record)
+            }
+            None => Err(Error::RetirementNotFound),
+        }
     }
 
     /// Total number of retirements recorded, across all projects.
@@ -279,10 +299,14 @@ impl RetirementContract {
     /// A [`Vec<BytesN<32>>`] of retirement record IDs, in creation order.
     /// Returns an empty vector if the project has no retirements.
     pub fn get_retirement_ids(env: Env, project_id: BytesN<32>) -> Vec<BytesN<32>> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::RetirementIdsByProject(project_id))
-            .unwrap_or_else(|| Vec::new(&env))
+        let key = DataKey::RetirementIdsByProject(project_id);
+        match env.storage().persistent().get(&key) {
+            Some(ids) => {
+                refresh_ttl(&env, &key);
+                ids
+            }
+            None => Vec::new(&env),
+        }
     }
 
     /// Full retirement records for a project, in retirement order.
@@ -304,7 +328,9 @@ impl RetirementContract {
         let mut records = Vec::new(&env);
         for i in 0..ids.len() {
             let id = ids.get(i).unwrap();
-            if let Some(record) = env.storage().persistent().get(&DataKey::Retirement(id)) {
+            let key = DataKey::Retirement(id);
+            if let Some(record) = env.storage().persistent().get(&key) {
+                refresh_ttl(&env, &key);
                 records.push_back(record);
             }
         }

@@ -408,6 +408,7 @@ All state-changing calls emit Soroban events for indexing (used by `web-app` and
 - **Verifying key governance is the highest-value target.** A malicious or compromised verifying-key update could allow forged proofs to mint uncapped credits. This path uses a multi-sig with a timelock (see `registry/src/governance.rs`); review this code first in any audit.
 - **Reentrancy:** Soroban's execution model differs from EVM reentrancy patterns, but cross-contract calls (e.g. `registry` → `credit-token`) are still checked for state-consistency ordering (checks-effects-interactions applied even where classic reentrancy isn't possible).
 - **Integer overflow:** all token math uses checked arithmetic (`checked_add`, `checked_mul`); overflow returns an explicit `Error::Overflow` rather than panicking or wrapping.
+- **Persistent storage TTL:** Soroban evicts persistent entries whose TTL is not refreshed, which would make projects, vintages, and retirement records unreachable. Every `storage().persistent().set()` is followed by an `extend_ttl` and every critical `get()` refreshes the entry on hit, extending entries toward `TARGET_LEDGER_TTL` (5,040,000 ledgers ≈ 1 year, the protocol maximum) whenever their remaining lifetime drops below `MIN_LEDGER_TTL` (600,000 ledgers ≈ 35 days). Both constants live in `shared/src/lib.rs` and are shared by `registry`, `credit-token`, and `retirement`.
 - Report vulnerabilities privately — see `SECURITY.md`. Do not open a public GitHub issue for security-sensitive findings.
 
 ---

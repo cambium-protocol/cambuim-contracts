@@ -3,9 +3,19 @@
 #[cfg(any(test, feature = "testutils"))]
 extern crate std;
 
+use cambium_shared::{MIN_LEDGER_TTL, TARGET_LEDGER_TTL};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol,
 };
+
+/// Refresh the TTL of a persistent entry so balances, allowances, and
+/// allowlist flags are never evicted. Called after every `persistent().set()`
+/// and on every hit of a `persistent().get()`.
+fn refresh_ttl(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, MIN_LEDGER_TTL, TARGET_LEDGER_TTL);
+}
 
 #[derive(Clone)]
 #[contracttype]
@@ -146,10 +156,14 @@ impl CreditTokenContract {
 
     /// Return the token balance for `id`.
     pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(id))
-            .unwrap_or(0)
+        let key = DataKey::Balance(id);
+        match env.storage().persistent().get(&key) {
+            Some(balance) => {
+                refresh_ttl(&env, &key);
+                balance
+            }
+            None => 0,
+        }
     }
 
     /// Transfer `amount` tokens from `from` to `to`.
@@ -169,12 +183,14 @@ impl CreditTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        refresh_ttl(&env, &DataKey::Balance(from.clone()));
 
         let to_balance = Self::balance(env.clone(), to.clone());
         let new_to_balance = to_balance.checked_add(amount).ok_or(TokenError::Overflow)?;
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_to_balance);
+        refresh_ttl(&env, &DataKey::Balance(to.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "transfer"), from.clone(), to), (amount,));
@@ -207,20 +223,23 @@ impl CreditTokenContract {
             return Err(TokenError::InsufficientBalance);
         }
 
-        env.storage().persistent().set(
-            &DataKey::Allowance(from.clone(), spender),
-            &(allowance - amount),
-        );
+        let allowance_key = DataKey::Allowance(from.clone(), spender.clone());
+        env.storage()
+            .persistent()
+            .set(&allowance_key, &(allowance - amount));
+        refresh_ttl(&env, &allowance_key);
 
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        refresh_ttl(&env, &DataKey::Balance(from.clone()));
 
         let to_balance = Self::balance(env.clone(), to.clone());
         let new_to_balance = to_balance.checked_add(amount).ok_or(TokenError::Overflow)?;
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_to_balance);
+        refresh_ttl(&env, &DataKey::Balance(to.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "transfer"), from.clone(), to), (amount,));
@@ -244,6 +263,7 @@ impl CreditTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowance(from.clone(), spender.clone()), &amount);
+        refresh_ttl(&env, &DataKey::Allowance(from.clone(), spender.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "approve"), from, spender), (amount,));
@@ -253,10 +273,14 @@ impl CreditTokenContract {
 
     /// Return the allowance `spender` has over `owner`'s tokens.
     pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Allowance(owner, spender))
-            .unwrap_or(0)
+        let key = DataKey::Allowance(owner, spender);
+        match env.storage().persistent().get(&key) {
+            Some(allowance) => {
+                refresh_ttl(&env, &key);
+                allowance
+            }
+            None => 0,
+        }
     }
 
     /// Mint `amount` tokens to `to`.
@@ -294,6 +318,7 @@ impl CreditTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_balance);
+        refresh_ttl(&env, &DataKey::Balance(to.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "mint"), admin, to), (amount,));
@@ -366,6 +391,7 @@ impl CreditTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        refresh_ttl(&env, &DataKey::Balance(from.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "burn"), admin, from), (amount,));
@@ -406,18 +432,22 @@ impl CreditTokenContract {
             .expect("not initialized");
         admin.require_auth();
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Allowlisted(address), &allowed);
+        let key = DataKey::Allowlisted(address);
+        env.storage().persistent().set(&key, &allowed);
+        refresh_ttl(&env, &key);
         Ok(())
     }
 
     /// Return whether an address is allowlisted.
     pub fn is_allowlisted(env: Env, address: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Allowlisted(address))
-            .unwrap_or(false)
+        let key = DataKey::Allowlisted(address);
+        match env.storage().persistent().get(&key) {
+            Some(allowed) => {
+                refresh_ttl(&env, &key);
+                allowed
+            }
+            None => false,
+        }
     }
 
     /// Internal gate: reject holders that are not allowlisted whenever the
