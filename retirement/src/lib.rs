@@ -285,6 +285,27 @@ impl RetirementContract {
             .unwrap_or(0)
     }
 
+    /// Check whether a shielded retirement's nullifier has already been spent.
+    ///
+    /// Returns `true` if the given `nullifier` has been consumed by a previous
+    /// shielded retirement and any new shielded claim using it would be
+    /// rejected as a replay, and `false` otherwise. This lets off-chain
+    /// services (e.g. the oracle-node shielded-retirement flow) inspect
+    /// nullifier status before constructing a retirement proof, avoiding a
+    /// wasted transaction.
+    ///
+    /// # Arguments
+    /// * `nullifier` - The 32-byte nullifier to inspect.
+    ///
+    /// # Returns
+    /// `true` if the nullifier was already spent by a shielded retirement,
+    /// `false` if it is unused.
+    pub fn is_nullifier_spent(env: Env, nullifier: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Nullified(nullifier))
+    }
+
     /// IDs of all retirements for a project, in retirement order.
     ///
     /// Returns the list of unique 32-byte record IDs for every retirement
