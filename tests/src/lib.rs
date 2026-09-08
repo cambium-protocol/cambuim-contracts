@@ -769,3 +769,129 @@ fn cancel_order_refunds_escrow() {
     assert_eq!(token_client.balance(&seller), 1000);
     assert_eq!(marketplace_client.get_orders(&pool_id).len(), 0);
 }
+
+/// Full mint → trade → retire lifecycle with the compliance allowlist enabled.
+///
+/// 1. Enable the allowlist.
+/// 2. Mint to a non-allowlisted address is rejected.
+/// 3. Allowlist the address, mint succeeds, trade and retire complete.
+/// 4. Remove the address from the allowlist; a subsequent transfer is rejected.
+#[test]
+fn allowlist_full_mint_trade_retire_lifecycle() {
+    let (
+        env,
+        registry_id,
+        credit_token_id,
+        _zk_verifier_id,
+        marketplace_id,
+        retirement_id,
+        signer,
+    ) = deploy_all();
+
+    let registry_client = cambium_registry::RegistryContractClient::new(&env, &registry_id);
+    let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
+    let marketplace_client =
+        cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
+    let retirement_client =
+        cambium_retirement::RetirementContractClient::new(&env, &retirement_id);
+
+    // Register a project and mint credits via the normal governance flow (before
+    // the allowlist is enabled so the registry does not need to be allowlisted).
+    let project_id = BytesN::from_array(&env, &[1u8; 32]);
+    let project = Project {
+        id: project_id.clone(),
+        methodology: Symbol::new(&env, "VM0007"),
+        geography: Symbol::new(&env, "BRA"),
+        external_registry_ref: None,
+        verifying_key_version: 1,
+    };
+    registry_client.register_project(&signer, &project);
+
+    let proof = Proof {
+        proof_data: Bytes::from_array(&env, &[1u8, 2, 3, 4]),
+        public_inputs: soroban_sdk::vec![&env, project_id.clone()],
+    };
+    registry_client.request_mint(&project_id, &2025, &1000, &proof);
+    assert_eq!(token_client.balance(&registry_id), 1000);
+
+    // --- Step 1: Enable the allowlist ---
+    token_client.enable_allowlist(&true);
+
+    // --- Step 2: Mint to a non-allowlisted address is rejected ---
+    let user = soroban_sdk::Address::generate(&env);
+    let blocked_mint = token_client.try_mint(&user, &1000);
+    assert_eq!(
+        blocked_mint,
+        Err(Ok(cambium_credit_token::TokenError::Unauthorized))
+    );
+    assert_eq!(token_client.balance(&user), 0);
+
+    // --- Step 3: Allowlist the user, mint, trade, and retire ---
+    token_client.set_allowlisted(&user, &true);
+    token_client.mint(&user, &1000);
+    assert_eq!(token_client.balance(&user), 1000);
+
+    // Trade: swap credits on the marketplace for a paired token.
+    // The marketplace contract must also be allowlisted on the credit token
+    // so that the user → marketplace transfer passes the allowlist gate.
+    token_client.set_allowlisted(&marketplace_id, &true);
+
+    let paired_token_id = deploy_paired_token(&env);
+    let paired_client =
+        cambium_credit_token::CreditTokenContractClient::new(&env, &paired_token_id);
+
+    // Fund an LP and create a pool.  The LP must be allowlisted on the credit
+    // token so the pool-creation escrow transfer succeeds.
+    let lp = soroban_sdk::Address::generate(&env);
+    token_client.set_allowlisted(&lp, &true);
+    token_client.mint(&lp, &1000);
+    paired_client.mint(&lp, &5000);
+
+    let pool_id = BytesN::from_array(&env, &[2u8; 32]);
+    marketplace_client.create_pool(
+        &lp,
+        &pool_id,
+        &PoolConfig {
+            credit_token: credit_token_id.clone(),
+            paired_token: paired_token_id.clone(),
+            paired_asset: Symbol::new(&env, "XLM"),
+            initial_credit: 1000,
+            initial_paired: 5000,
+            fee_bps: 0,
+        },
+    );
+
+    // User swaps 100 credits for paired tokens.
+    // Constant-product: out = 5000 * 100 / (1000 + 100) = 454
+    let amount_out = marketplace_client.swap(&user, &pool_id, &100, &0);
+    assert_eq!(amount_out, 454);
+    assert_eq!(token_client.balance(&user), 900);
+    assert_eq!(paired_client.balance(&user), 454);
+
+    // Retire 100 credits.
+    let record = retirement_client.retire(
+        &user,
+        &project_id,
+        &2025,
+        &100,
+        &false,
+        &BytesN::from_array(&env, &[0u8; 32]),
+    );
+    assert_eq!(record.project_id, project_id);
+    assert_eq!(record.vintage_year, 2025);
+    assert_eq!(record.amount, 100);
+    assert_eq!(record.retiree, RetireeRef::Public(user.clone()));
+    assert_eq!(token_client.balance(&user), 800);
+
+    let vintage = registry_client.get_vintage(&project_id, &2025);
+    assert_eq!(vintage.total_issued, 1000);
+    assert_eq!(vintage.total_retired, 100);
+
+    // --- Step 4: Remove from the allowlist, confirm transfer rejected ---
+    token_client.set_allowlisted(&user, &false);
+    let blocked_transfer = token_client.try_transfer(&user, &registry_id, &100);
+    assert_eq!(
+        blocked_transfer,
+        Err(Ok(cambium_credit_token::TokenError::Unauthorized))
+    );
+}
