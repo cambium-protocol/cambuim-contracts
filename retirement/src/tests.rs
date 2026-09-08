@@ -345,6 +345,56 @@ fn retire_shielded_ignores_nullifier_when_public() {
     assert_eq!(record.retiree, RetireeRef::Public(from.clone()));
 }
 
+// ---- is_nullifier_spent tests ----
+
+#[test]
+fn is_nullifier_spent_false_for_unused_nullifier() {
+    let stack = setup();
+    let env = &stack.env;
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+
+    // A nullifier that was never used is not spent.
+    assert!(!client.is_nullifier_spent(&nullifier(env)));
+}
+
+#[test]
+fn is_nullifier_spent_true_after_shielded_retirement() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+
+    let nullifier = nullifier(env);
+    client.retire(&from, &project_id, &2025, &100, &true, &nullifier);
+
+    // The used nullifier is now marked as spent.
+    assert!(client.is_nullifier_spent(&nullifier));
+}
+
+#[test]
+fn is_nullifier_spent_rejects_spent_nullifier_replay() {
+    let stack = setup();
+    let env = &stack.env;
+    let from = Address::generate(&stack.env);
+    fund(&stack, &from, 1000);
+    let project_id = sample_project_id(&stack.env);
+    let client = RetirementContractClient::new(&stack.env, &stack.retirement_id);
+    let token_client = CreditTokenContractClient::new(&stack.env, &stack.credit_token_id);
+
+    let nullifier = nullifier(env);
+    client.retire(&from, &project_id, &2025, &100, &true, &nullifier);
+    assert!(client.is_nullifier_spent(&nullifier));
+
+    // A retirement attempt with the spent nullifier is rejected.
+    let result = client.try_retire(&from, &project_id, &2025, &100, &true, &nullifier);
+    assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
+
+    // No additional credits were burned.
+    assert_eq!(token_client.balance(&from), 900);
+}
+
 #[test]
 fn retire_multiple_projects() {
     let stack = setup();
