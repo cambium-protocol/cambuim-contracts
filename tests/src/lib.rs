@@ -778,22 +778,14 @@ fn cancel_order_refunds_escrow() {
 /// 4. Remove the address from the allowlist; a subsequent transfer is rejected.
 #[test]
 fn allowlist_full_mint_trade_retire_lifecycle() {
-    let (
-        env,
-        registry_id,
-        credit_token_id,
-        _zk_verifier_id,
-        marketplace_id,
-        retirement_id,
-        signer,
-    ) = deploy_all();
+    let (env, registry_id, credit_token_id, _zk_verifier_id, marketplace_id, retirement_id, signer) =
+        deploy_all();
 
     let registry_client = cambium_registry::RegistryContractClient::new(&env, &registry_id);
     let token_client = cambium_credit_token::CreditTokenContractClient::new(&env, &credit_token_id);
     let marketplace_client =
         cambium_marketplace::MarketplaceContractClient::new(&env, &marketplace_id);
-    let retirement_client =
-        cambium_retirement::RetirementContractClient::new(&env, &retirement_id);
+    let retirement_client = cambium_retirement::RetirementContractClient::new(&env, &retirement_id);
 
     // Register a project and mint credits via the normal governance flow (before
     // the allowlist is enabled so the registry does not need to be allowlisted).
